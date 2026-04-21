@@ -12,8 +12,9 @@ n_demand = 2
 t_steps  = 8760 #can modify to make problem larger
 
 g_opex   = [30, 20, 40]
-g_op_max = [100, 50, 500]   # Increased capacity for generator 3 to ensure feasibility
 g_capex = [100, 200, 80]
+
+g_max_cap = [100, 50, 500]   # Increased capacity for generator 3 to ensure feasibility
 
 incidence = [1, -1]
 
@@ -44,9 +45,9 @@ end
 # ── Reference direct LP solve ───────────────────────────────────
 ref_model = Model(HiGHS.Optimizer)
 
-@variable(ref_model, g[1:n_gen, 1:t_steps] >= 0)
-@variable(ref_model, -1 * f_lim <= f[1:n_lines, 1:t_steps] <= f_lim)
-@variable(ref_model, 0 <= Capacity_gen[1:n_gen] <= 1e8) # Generator Capacity Limits, do we want to make this an integer variable? or maybe make the lines integer variables?
+@variable(ref_model, g[i=1:n_gen, t=1:t_steps] >= 0)
+@variable(ref_model, -1 * f_lim <= f[l=1:n_lines, t=1:t_steps] <= f_lim)
+@variable(ref_model, 0 <= Capacity_gen[i=1:n_gen] <= g_max_cap[i]) # Generator Capacity Limits, do we want to make this an integer variable? or maybe make the lines integer variables?
 
 @objective(ref_model, Min, sum(g_opex[i]*g[i,t] for i=1:n_gen, t=1:t_steps) + sum(g_capex[i] * Capacity_gen[i] for i=1:n_gen))
 
