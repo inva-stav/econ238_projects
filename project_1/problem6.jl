@@ -7,27 +7,48 @@ include(joinpath(@__DIR__, "algorithms.jl"))
 n_gen    = 3
 n_nodes  = 2
 n_lines  = 1
+
 n_demand = 2
-t_steps  = 24
+t_steps  = 72 #can modify to make problem larger
 
 g_opex   = [30, 20, 40]
 g_op_max = [100, 50, 500]   # Increased capacity for generator 3 to ensure feasibility
+g_capex = [100, 200, 80]
 
 incidence = [1, -1]
 
 f_lim = 1000   # 1 GW line limit
-demand = [
-  [60, 60, 50, 50, 70, 90, 110, 120, 120, 110, 100, 100, 100, 90, 110, 130, 150, 140, 130, 120, 100, 80, 70, 60],
-  [150, 140, 130, 120, 150, 180, 200, 220, 210, 200, 190, 180, 170, 160, 180, 200, 230, 250, 240, 220, 190, 170, 160, 150]
+
+# Base 24-hour daily shape (MW) per demand node.
+base_demand = [
+    [60, 60, 50, 50, 70, 90, 110, 120, 120, 110, 100, 100, 100, 90, 110, 130, 150, 140, 130, 120, 100, 80, 70, 60],
+    [150, 140, 130, 120, 150, 180, 200, 220, 210, 200, 190, 180, 170, 160, 180, 200, 230, 250, 240, 220, 190, 170, 160, 150]
 ]
+hours_per_day = length(base_demand[1])
+
+# Build t_steps-long demand per node by tiling the daily shape and scaling
+# each day by a small random multiplier so days are similar but not identical.
+using Random
+Random.seed!(42)
+day_noise_std = 0.05   # ~5% day-to-day variability
+n_days = ceil(Int, t_steps / hours_per_day)
+demand = [Float64[] for _ in 1:n_demand]
+for nd in 1:n_demand
+    for _ in 1:n_days
+        day_scale = 1.0 + day_noise_std * randn()
+        append!(demand[nd], base_demand[nd] .* day_scale)
+    end
+    resize!(demand[nd], t_steps)
+end
 
 # ── Reference direct LP solve ───────────────────────────────────
 ref_model = Model(HiGHS.Optimizer)
 
 @variable(ref_model, g[1:n_gen, 1:t_steps] >= 0)
 @variable(ref_model, -1 * f_lim <= f[1:n_lines, 1:t_steps] <= f_lim)
+@variable(ref_model, 0 <= Capacity_gen[1:n_gen] <= 1e8) # Generator Capacity Limits, do we want to make this an integer variable? or maybe make the lines integer variables?
 
-@objective(ref_model, Min, sum(g_opex[i]*g[i,t] for i=1:n_gen, t=1:t_steps))
+@objective(ref_model, Min, sum(g_opex[i]*g[i,t] for i=1:n_gen, t=1:t_steps) + sum(g_capex[i] * Capacity_gen[i] for i=1:n_gen))
 
 @constraint(ref_model, gen_op_lim[i=1:n_gen,t=1:t_steps], g[i,t] <= g_op_max[i])
 
@@ -41,8 +62,9 @@ optimize!(ref_model)
 
 if termination_status(ref_model) == MOI.OPTIMAL
     println("Reference LP optimal!  obj = ", objective_value(ref_model))
-    g_values = value.(g)
-    f_values = value.(f)
+    g_values   = value.(g)
+    f_values   = value.(f)
+    cap_values = value.(Capacity_gen)
     println("\nGenerator outputs (g):")
     for i in 1:n_gen
         println("  Generator $(i): ", g_values[i,:])
@@ -51,24 +73,28 @@ if termination_status(ref_model) == MOI.OPTIMAL
     for i in 1:n_lines
         println("  Line $(i): ", f_values[i,:])
     end
+    println("\nInstalled capacities: ", cap_values)
 else
     println("Reference LP failed: ", termination_status(ref_model))
 end
 
-# Generator output plots (reference)
+# Generator dispatch plot (reference): all generators + capacity lines
 prob_num = 6
 out_dir  = joinpath(@__DIR__, "results", "problem$(prob_num)")
 mkpath(out_dir)
 
 if @isdefined(g_values)
     time_steps = 1:t_steps
+    p = plot(xlabel="Time Step", ylabel="Generation (MW)",
+             title="Generator Dispatch — Reference LP", legend=:outertopright)
     for i in 1:n_gen
-        p = plot(time_steps, g_values[i,:],
-                 label="Generator $(i) Output", xlabel="Time Step",
-                 ylabel="Generation (MW)", title="Generator $(i) Output Over Time")
-        savefig(p, joinpath(out_dir, "ref_gen_$(i).png"))
-        Plots.closeall()
+        color = palette(:tab10)[i]
+        plot!(p, time_steps, g_values[i,:], label="Gen $(i)", lw=2, color=color)
+        hline!(p, [cap_values[i]], label="Gen $(i) capacity",
+               linestyle=:dash, color=color)
     end
+    savefig(p, joinpath(out_dir, "ref_dispatch.png"))
+    Plots.closeall()
 end
 
 # ── Kelley formulation ───────────────────────────────────────────

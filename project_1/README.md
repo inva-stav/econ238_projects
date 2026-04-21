@@ -4,7 +4,7 @@
 
 ```julia
 using Pkg
-Pkg.add(["JuMP", "HiGHS", "Plots", "CSV", "DataFrames"])
+Pkg.add(["JuMP", "HiGHS", "Plots", "CSV", "DataFrames", "Random"])
 ```
 
 ## Run a single problem
