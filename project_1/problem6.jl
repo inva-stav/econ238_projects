@@ -9,7 +9,7 @@ n_nodes  = 2
 n_lines  = 1
 
 n_demand = 2
-t_steps  = 72 #can modify to make problem larger
+t_steps  = 8760 #can modify to make problem larger
 
 g_opex   = [30, 20, 40]
 g_op_max = [100, 50, 500]   # Increased capacity for generator 3 to ensure feasibility
