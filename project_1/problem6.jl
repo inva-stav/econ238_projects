@@ -50,7 +50,7 @@ ref_model = Model(HiGHS.Optimizer)
 
 @objective(ref_model, Min, sum(g_opex[i]*g[i,t] for i=1:n_gen, t=1:t_steps) + sum(g_capex[i] * Capacity_gen[i] for i=1:n_gen))
 
-@constraint(ref_model, gen_op_lim[i=1:n_gen,t=1:t_steps], g[i,t] <= g_op_max[i])
+@constraint(ref_model, gen_op_lim[i=1:n_gen,t=1:t_steps], g[i,t] <= Capacity_gen[i])
 
 @constraint(ref_model, demand_balance_n1[t=1:t_steps],
     g[1,t] + g[2,t] - demand[1][t] + f[1,t] == 0)
