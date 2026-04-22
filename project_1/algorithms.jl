@@ -59,9 +59,9 @@ function run_kelley(; tol=1e-4, MaxIteration=1000, logscale::Bool=false)
     save_outputs(X, F, G, LB, UB, x_best, k, time()-t_start, "kelley"; logscale=logscale)
 end
 
-# ── Subgradient algorithm (TODO) ────────────────────────────────
+# ── Subgradient algorithm ────────────────────────────────────────
 function run_subgradient(; tol=1e-4, MaxIteration=1000)
-    # TODO: implement projected subgradient method
+    
     # Outline:
     #   1. x1 = copy(x_lb); f1, g1 = functionAndGradient(x1); UB = f1; x_best = x1
     #   2. For k = 1, ..., MaxIteration:
@@ -72,7 +72,139 @@ function run_subgradient(; tol=1e-4, MaxIteration=1000)
     #        e. Step size: e.g. α_k = α₀/√k  or Polyak step
     #   3. No clean lower bound — LB stays at -1e6
     #   4. Call save_outputs(..., "subgradient") when done
-    error("Subgradient method not yet implemented")
+    
+    # Start timing the algorithm
+    t_start = time()
+    
+    # ── Step 1: Initialize ──────────────────────────────────────
+    # Start at the lower bound of the feasible region
+    x_k = copy(x_lb)
+    
+    # Evaluate the function and gradient at the initial point
+    f_k, g_k = functionAndGradient(x_k)
+    
+    # Initialize the best solution found so far
+    # Upper bound (UB) is the best objective value we've seen
+    x_best = copy(x_k)
+    f_best = f_k
+    
+    # Storage for iteration history
+    # X: points visited, F: function values, G: (sub)gradients
+    X = [copy(x_k)]
+    F = [f_k]
+    G = [copy(g_k)]
+    
+    # Upper bound track: best objective found so far
+    UB = [f_k]
+    
+    # Lower bound track: subgradient method doesn't provide clean LB,
+    # so we keep it at a sentinel value for compatibility with plotting
+    LB = [-1.0e6]
+    
+    # ── Step 2: Choose step-size rule parameters ────────────────
+    # We'll use a diminishing step size: α_k = α₀ / sqrt(k)
+    # This guarantees convergence for convex functions
+    α₀ = 0.1  # Initial step size (tune this if needed)
+    
+    # Alternative: Polyak step size (commented out, but you can try it)
+    # Requires an estimate of the optimal value f_opt
+    # α_k = (f_k - f_opt) / ||g_k||²
+    
+    # Iteration counter (starts at 1 since we've already done initialization)
+    k = 1
+    
+    # ── Step 3: Main iteration loop ─────────────────────────────
+    # Continue until gap is small or max iterations reached
+    # Note: for subgradient, "gap" is just how much UB has changed recently
+    # We'll use a simple stopping criterion: limited iterations or small gradient
+    while k < MaxIteration
+        # Increment iteration counter
+        k += 1
+        
+        # ── (a) Compute step size ───────────────────────────────
+        # Diminishing step size rule: α_k = α₀ / sqrt(k)
+        α_k = α₀ / sqrt(k)
+        
+        # Alternative Polyak step (if you have an estimate of f_opt):
+        # f_opt_estimate = 0.0  # replace with known or guessed optimum
+        # g_norm_sq = sum(g_k .^ 2)
+        # α_k = max(0.0, (f_k - f_opt_estimate) / (g_norm_sq + 1e-10))
+        
+        # ── (b) Take a subgradient step ─────────────────────────
+        # Move in the negative subgradient direction (descent)
+        # For minimization: x_new = x_old - α * g
+        y = x_k - α_k * g_k
+        
+        # ── (c) Project back onto feasible region ───────────────
+        # The feasible region is a box: [x_lb, x_ub]
+        # Projection is simply clamping each coordinate
+        x_next = clamp.(y, x_lb, x_ub)
+        
+        # ── (d) Evaluate function at new point ──────────────────
+        f_next, g_next = functionAndGradient(x_next)
+        
+        # ── (e) Update best solution found ──────────────────────
+        # Subgradient method doesn't monotonically decrease objective,
+        # so we track the best value seen so far
+        if f_next < f_best
+            f_best = f_next
+            x_best = copy(x_next)
+        end
+        
+        # ── (f) Store iteration data ────────────────────────────
+        # IMPORTANT: Push to all arrays to keep them synchronized
+        push!(X, copy(x_next))
+        push!(F, f_next)
+        push!(G, copy(g_next))
+        push!(UB, f_best)  # UB is the best objective seen so far
+        push!(LB, -1.0e6)  # No meaningful LB from subgradient method
+        
+        # ── (g) Print progress ──────────────────────────────────
+        g_norm = sqrt(sum(g_next .^ 2))
+        println("k=$(lpad(k,4))  x_k=$(round.(x_next,digits=5))  " *
+                "f(x_k)=$(round(f_next,digits=6))  " *
+                "f_best=$(round(f_best,digits=6))  " *
+                "α_k=$(round(α_k,digits=6))  " *
+                "||g||=$(round(g_norm,digits=6))")
+        
+        # ── (h) Check stopping criteria ────────────────────────
+        # Stop if gradient is very small (near stationary point)
+        if sqrt(sum(g_next .^ 2)) < tol
+            println("Stopped: gradient norm < tol")
+            break
+        end
+        
+        # Stop if step size becomes too small
+        if α_k < 1e-8
+            println("Stopped: step size too small")
+            break
+        end
+        
+        # Stop if objective hasn't improved in a while (optional)
+        # if k > 50 && abs(UB[end] - UB[end-50]) < tol
+        #     println("Stopped: no improvement in 50 iterations")
+        #     break
+        # end
+        
+        # ── (i) Prepare for next iteration ──────────────────────
+        x_k = x_next
+        f_k = f_next
+        g_k = g_next
+    end
+    
+    # ── Step 4: Save results ────────────────────────────────────
+    # Record final iteration count and CPU time
+    cpu_time = time() - t_start
+    
+    # Save all outputs (CSV files and plots)
+    # k now correctly represents the number of iterations (including initial point)
+    save_outputs(X, F, G, LB, UB, x_best, k, cpu_time, "subgradient")
+    
+    println("\nSubgradient algorithm completed:")
+    println("  Best objective: $(f_best)")
+    println("  Best solution:  $(x_best)")
+    println("  Iterations:     $(k)")
+    println("  CPU time:       $(round(cpu_time, digits=4))s")
 end
 
 # ── Dispatch helper ──────────────────────────────────────────────
