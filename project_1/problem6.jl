@@ -9,16 +9,20 @@ n_nodes  = 2
 n_lines  = 1
 
 n_demand = 2
-t_steps  = 24 #can modify to make problem larger
+t_steps  = 600 #can modify to make problem larger
 
 g_opex   = [30, 20, 40]
 g_capex = [100, 200, 80]
 
-g_max_cap = [100, 50, 500]   # Increased capacity for generator 3 to ensure feasibility
+# g_max_cap = [100, 50, 500]   # Increased capacity for generator 3 to ensure feasibility
 
 incidence = [1, -1]
 
-f_lim = 1000   # 1 GW line limit
+f_lim = 500   # 1 GW line limit
+
+# Shared optimality/feasibility tolerance — used for the HiGHS reference solve,
+# the inner dispatch oracle, and Kelley's UB–LB gap stopping criterion.
+OPT_TOL = 1e-5
 
 # Base 24-hour daily shape (MW) per demand node.
 base_demand = [
@@ -44,6 +48,9 @@ end
 
 # # ── Expansion Planning Problem ───────────────────────────────────
 expansion_model = Model(HiGHS.Optimizer)
+set_optimizer_attribute(expansion_model, "primal_feasibility_tolerance", OPT_TOL)
+set_optimizer_attribute(expansion_model, "dual_feasibility_tolerance",   OPT_TOL)
+set_optimizer_attribute(expansion_model, "ipm_optimality_tolerance",     OPT_TOL)
 
 @variable(expansion_model, g[i=1:n_gen, t=1:t_steps] >= 0)
 @variable(expansion_model, -1 * f_lim <= f[l=1:n_lines, t=1:t_steps] <= f_lim)
@@ -132,6 +139,9 @@ x_ub = fill(1.0e5, n)   # loose upper bound on capacity
 VOLL = 1.0e6
 oracle_model = Model(HiGHS.Optimizer)
 set_silent(oracle_model)
+set_optimizer_attribute(oracle_model, "primal_feasibility_tolerance", OPT_TOL)
+set_optimizer_attribute(oracle_model, "dual_feasibility_tolerance",   OPT_TOL)
+set_optimizer_attribute(oracle_model, "ipm_optimality_tolerance",     OPT_TOL)
 
 @variable(oracle_model, g_d[i=1:n_gen, t=1:t_steps] >= 0)
 @variable(oracle_model, -f_lim <= f_d[l=1:n_lines, t=1:t_steps] <= f_lim)
@@ -175,7 +185,7 @@ prob_num = "6benders"
 out_dir  = joinpath(@__DIR__, "results", "problem$(prob_num)")
 mkpath(out_dir)
 
-run_algorithm(logscale = true, tol=1e-9)
+run_algorithm(logscale = true, tol = OPT_TOL)
 
 # ── HiGHS vs Kelley comparison ──────────────────────────────────
 kelley_caps = CSV.read(joinpath(out_dir, "capacities_kelley.csv"), DataFrame).Value

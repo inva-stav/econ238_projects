@@ -79,7 +79,7 @@ end
 # Each problem file calls this after defining its globals.
 function run_algorithm(; logscale::Bool=false, tol=1e-4)
     if alg in ("kelley", "both")
-        run_kelley(logscale=logscale,  tol=1e-4)
+        run_kelley(logscale=logscale, tol=tol)
     end
-    if alg in ("subgradient", "both"); run_subgradient( tol=1e-4); end
+    if alg in ("subgradient", "both"); run_subgradient(tol=tol); end
 end
