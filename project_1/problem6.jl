@@ -9,7 +9,7 @@ n_nodes  = 2
 n_lines  = 1
 
 n_demand = 2
-t_steps  = 8760 #can modify to make problem larger
+t_steps  = 1 #can modify to make problem larger
 
 g_opex   = [30, 20, 40]
 g_capex = [100, 200, 80]
@@ -42,61 +42,118 @@ for nd in 1:n_demand
     resize!(demand[nd], t_steps)
 end
 
-# ── Reference direct LP solve ───────────────────────────────────
-ref_model = Model(HiGHS.Optimizer)
+# # ── Expansion Planning Problem ───────────────────────────────────
+# expansion_model = Model(HiGHS.Optimizer)
 
-@variable(ref_model, g[i=1:n_gen, t=1:t_steps] >= 0)
-@variable(ref_model, -1 * f_lim <= f[l=1:n_lines, t=1:t_steps] <= f_lim)
-@variable(ref_model, 0 <= Capacity_gen[i=1:n_gen] <= g_max_cap[i]) # Generator Capacity Limits, do we want to make this an integer variable? or maybe make the lines integer variables?
+# @variable(expansion_model, g[i=1:n_gen, t=1:t_steps] >= 0)
+# @variable(expansion_model, -1 * f_lim <= f[l=1:n_lines, t=1:t_steps] <= f_lim)
+# @variable(expansion_model, 0 <= Capacity_gen[i=1:n_gen] <= 1e8) # Generator Capacity Limits, do we want to make this an integer variable? or maybe make the lines integer variables?
 
-@objective(ref_model, Min, sum(g_opex[i]*g[i,t] for i=1:n_gen, t=1:t_steps) + sum(g_capex[i] * Capacity_gen[i] for i=1:n_gen))
+# @objective(expansion_model, Min, sum(g_opex[i]*g[i,t] for i=1:n_gen, t=1:t_steps) + sum(g_capex[i] * Capacity_gen[i] for i=1:n_gen))
 
-@constraint(ref_model, gen_op_lim[i=1:n_gen,t=1:t_steps], g[i,t] <= Capacity_gen[i])
+# @constraint(expansion_model, gen_op_lim[i=1:n_gen,t=1:t_steps], g[i,t] <= Capacity_gen[i])
 
-@constraint(ref_model, demand_balance_n1[t=1:t_steps],
-    g[1,t] + g[2,t] - demand[1][t] + f[1,t] == 0)
+# @constraint(expansion_model, demand_balance_n1[t=1:t_steps],
+#     g[1,t] + g[2,t] - demand[1][t] + f[1,t] == 0)
 
-@constraint(ref_model, demand_balance_n2[t=1:t_steps],
-    g[3,t] - demand[2][t] - f[1,t] == 0)
+# @constraint(expansion_model, demand_balance_n2[t=1:t_steps],
+#     g[3,t] - demand[2][t] - f[1,t] == 0)
 
-optimize!(ref_model)
+# optimize!(expansion_model)
 
-if termination_status(ref_model) == MOI.OPTIMAL
-    println("Reference LP optimal!  obj = ", objective_value(ref_model))
-    g_values   = value.(g)
-    f_values   = value.(f)
-    cap_values = value.(Capacity_gen)
-    println("\nGenerator outputs (g):")
-    for i in 1:n_gen
-        println("  Generator $(i): ", g_values[i,:])
-    end
-    println("\nLine flows (f):")
-    for i in 1:n_lines
-        println("  Line $(i): ", f_values[i,:])
-    end
-    println("\nInstalled capacities: ", cap_values)
-else
-    println("Reference LP failed: ", termination_status(ref_model))
-end
+# if termination_status(expansion_model) == MOI.OPTIMAL
+#     println("Reference LP optimal!  obj = ", objective_value(expansion_model))
+#     g_values   = value.(g)
+#     f_values   = value.(f)
+#     cap_values = value.(Capacity_gen)
+#     println("\nGenerator outputs (g):")
+#     for i in 1:n_gen
+#         println("  Generator $(i): ", g_values[i,:])
+#     end
+#     println("\nLine flows (f):")
+#     for i in 1:n_lines
+#         println("  Line $(i): ", f_values[i,:])
+#     end
+#     println("\nInstalled capacities: ", cap_values)
+# else
+#     println("Reference LP failed: ", termination_status(expansion_model))
+# end
 
-# Generator dispatch plot (reference): all generators + capacity lines
-prob_num = 6
-out_dir  = joinpath(@__DIR__, "results", "problem$(prob_num)")
-mkpath(out_dir)
+# # Generator dispatch plot (reference): all generators + capacity lines
+# prob_num = 6
+# out_dir  = joinpath(@__DIR__, "results", "problem$(prob_num)")
+# mkpath(out_dir)
 
-if @isdefined(g_values)
-    time_steps = 1:t_steps
-    p = plot(xlabel="Time Step", ylabel="Generation (MW)",
-             title="Generator Dispatch — Reference LP", legend=:outertopright)
-    for i in 1:n_gen
-        color = palette(:tab10)[i]
-        plot!(p, time_steps, g_values[i,:], label="Gen $(i)", lw=2, color=color)
-        hline!(p, [cap_values[i]], label="Gen $(i) capacity",
-               linestyle=:dash, color=color)
-    end
-    savefig(p, joinpath(out_dir, "ref_dispatch.png"))
-    Plots.closeall()
-end
+# if @isdefined(g_values)
+#     time_steps = 1:t_steps
+#     p = plot(xlabel="Time Step", ylabel="Generation (MW)",
+#              title="Generator Dispatch — Reference LP", legend=:outertopright)
+#     for i in 1:n_gen
+#         color = palette(:tab10)[i]
+#         plot!(p, time_steps, g_values[i,:], label="Gen $(i)", lw=2, color=color)
+#         hline!(p, [cap_values[i]], label="Gen $(i) capacity",
+#                linestyle=:dash, color=color)
+#     end
+#     savefig(p, joinpath(out_dir, "ref_dispatch.png"))
+#     Plots.closeall()
+# end
+
+# # -- Dispatch with highs ----------------
+# dispatch_model = Model(HiGHS.Optimizer)
+
+# @variable(dispatch_model, g[i=1:n_gen, t=1:t_steps] >= 0)
+# @variable(dispatch_model, -1 * f_lim <= f[l=1:n_lines, t=1:t_steps] <= f_lim)
+
+# @objective(dispatch_model, Min, sum(g_opex[i]*g[i,t] for i=1:n_gen, t=1:t_steps) )
+
+# @constraint(dispatch_model, gen_op_lim[i=1:n_gen,t=1:t_steps], g[i,t] <= g_max_cap[i])
+
+# @constraint(dispatch_model, demand_balance_n1[t=1:t_steps],
+#     g[1,t] + g[2,t] - demand[1][t] + f[1,t] == 0)
+
+# @constraint(dispatch_model, demand_balance_n2[t=1:t_steps],
+#     g[3,t] - demand[2][t] - f[1,t] == 0)
+
+# optimize!(dispatch_model)
+
+# if termination_status(dispatch_model) == MOI.OPTIMAL
+#     println("Reference LP optimal!  obj = ", objective_value(dispatch_model))
+#     g_values   = value.(g)
+#     f_values   = value.(f)
+#     cap_values = value.(g_max_cap)
+#     println("\nGenerator outputs (g):")
+#     for i in 1:n_gen
+#         println("  Generator $(i): ", g_values[i,:])
+#     end
+#     println("\nLine flows (f):")
+#     for i in 1:n_lines
+#         println("  Line $(i): ", f_values[i,:])
+#     end
+#     println("\nInstalled capacities: ", cap_values)
+# else
+#     println("Reference LP failed: ", termination_status(dispatch_model))
+# end
+
+# # Generator dispatch plot (reference): all generators + capacity lines
+# prob_num = "6dispatch"
+# out_dir  = joinpath(@__DIR__, "results", "problem$(prob_num)")
+# mkpath(out_dir)
+
+# if @isdefined(g_values)
+#     time_steps = 1:t_steps
+#     p = plot(xlabel="Time Step", ylabel="Generation (MW)",
+#              title="Generator Dispatch — Reference LP", legend=:outertopright)
+#     for i in 1:n_gen
+#         color = palette(:tab10)[i]
+#         plot!(p, time_steps, g_values[i,:], label="Gen $(i)", lw=2, color=color)
+#         hline!(p, [cap_values[i]], label="Gen $(i) capacity",
+#                linestyle=:dash, color=color)
+#     end
+#     savefig(p, joinpath(out_dir, "ref_dispatch.png"))
+#     Plots.closeall()
+# end
+
+
 
 # ── Kelley formulation ───────────────────────────────────────────
 # Decision vector x layout (length n):
@@ -107,6 +164,7 @@ alg   = "kelley"
 n_epi = n_nodes * t_steps
 n     = t_steps*n_gen + t_steps*n_lines + n_epi
 
+# decision varible vector indexing function
 g_idx(i, t)    = (t-1)*n_gen   + i
 f_idx(l, t)    = t_steps*n_gen + (t-1)*n_lines + l
 epi_idx(nd, t) = t_steps*n_gen + t_steps*n_lines + (t-1)*n_nodes + nd
@@ -116,6 +174,7 @@ x_lb = zeros(n)
 x_ub = Vector{Float64}(undef, n)
 for i in 1:n_gen
     for t in 1:t_steps
+        x_lb[g_idx(i,t)] = g_op_max[i]
         x_ub[g_idx(i, t)] = g_op_max[i]
     end
 end
@@ -160,7 +219,7 @@ function balance_oracle(x, idx)
         gv[g_idx(1,t)] =  1.0
         gv[g_idx(2,t)] =  1.0
         gv[f_idx(1,t)] =  1.0
-    else  # nd == 2
+    else  # node == 2
         v = x[g_idx(3,t)] - x[f_idx(1,t)] - demand[2][t]
         gv[g_idx(3,t)] =  1.0
         gv[f_idx(1,t)] = -1.0   # negative injection due to withdraw from line 1
@@ -168,7 +227,7 @@ function balance_oracle(x, idx)
     return (v, gv, epi_idx(nd, t))
 end
 
-balance_kind = :eq
+balance_kind = :geq
 
 dispatch(balance_indices = balance_indices,
          balance_oracle  = balance_oracle,

@@ -61,6 +61,10 @@ function run_kelley(; tol=1e-4, MaxIteration=1000,
         end
     end
 
+    println("k=$(lpad(k,4))")
+    println("x_k=$(round.(x1,digits=3))")
+    println("Objective Values: LB=$(round(LB[1],digits=3))  UB=$(round(UB[end],digits=3))  gap=$(round(UB[end]-LB[end],digits=3))")
+
     while (UB[end] - LB[end] > tol) && (k < MaxIteration)
         k += 1
         optimize!(model)
@@ -72,7 +76,9 @@ function run_kelley(; tol=1e-4, MaxIteration=1000,
         if f_k < UB[end]; x_best = copy(x_k); end
         push!(UB, min(UB[end], f_k))
 
-        println("k=$(lpad(k,4))  x_k=$(round.(x_k,digits=5))  LB=$(round(θ_k,digits=6))  UB=$(round(UB[end],digits=6))  gap=$(round(UB[end]-LB[end],digits=6))")
+        println("k=$(lpad(k,4))")
+        println("x_k=$(round.(x_k,digits=3))")
+        println("Objective Values: LB=$(round(θ_k,digits=3))  UB=$(round(UB[end],digits=3))  gap=$(round(UB[end]-LB[end],digits=3))")
 
         push!(F, f_k); push!(G, g_k); push!(X, x_k)
         @constraint(model, θ >= F[end] + G[end]' * (x .- X[end]))
