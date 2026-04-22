@@ -60,7 +60,7 @@ function run_kelley(; tol=1e-4, MaxIteration=1000, logscale::Bool=false)
 end
 
 # ── Subgradient algorithm ────────────────────────────────────────
-function run_subgradient(; tol=1e-4, MaxIteration=1000)
+function run_subgradient(; tol=1e-4, MaxIteration=50)
     
     # Outline:
     #   1. x1 = copy(x_lb); f1, g1 = functionAndGradient(x1); UB = f1; x_best = x1
@@ -78,10 +78,12 @@ function run_subgradient(; tol=1e-4, MaxIteration=1000)
     
     # ── Step 1: Initialize ──────────────────────────────────────
     # Start at the lower bound of the feasible region
-    x_k = copy(x_lb)
+    x_k = copy(x_lb + x_ub) / 2  # Midpoint initialization (can also try x_lb or random)
     
     # Evaluate the function and gradient at the initial point
     f_k, g_k = functionAndGradient(x_k)
+    println("Function value at initial point: f(x_k)=$(round(f_k,digits=3))")
+    println("Gradient at initial point: g_k=$(round.(g_k,digits=3))")
     
     # Initialize the best solution found so far
     # Upper bound (UB) is the best objective value we've seen
@@ -104,7 +106,7 @@ function run_subgradient(; tol=1e-4, MaxIteration=1000)
     # ── Step 2: Choose step-size rule parameters ────────────────
     # We'll use a diminishing step size: α_k = α₀ / sqrt(k)
     # This guarantees convergence for convex functions
-    α₀ = 0.1  # Initial step size (tune this if needed)
+    α₀ = 1  # Initial step size (tune this if needed)
     
     # Alternative: Polyak step size (commented out, but you can try it)
     # Requires an estimate of the optimal value f_opt
@@ -117,6 +119,9 @@ function run_subgradient(; tol=1e-4, MaxIteration=1000)
     # Continue until gap is small or max iterations reached
     # Note: for subgradient, "gap" is just how much UB has changed recently
     # We'll use a simple stopping criterion: limited iterations or small gradient
+    println("k=$(lpad(k,4))  x_lb=$(round.(x_lb,digits=5)),
+      x_up=$(round.(x_ub,digits=5))" )
+
     while k < MaxIteration
         # Increment iteration counter
         k += 1
@@ -133,12 +138,15 @@ function run_subgradient(; tol=1e-4, MaxIteration=1000)
         # ── (b) Take a subgradient step ─────────────────────────
         # Move in the negative subgradient direction (descent)
         # For minimization: x_new = x_old - α * g
+        println("x_k=$(round.(x_k,digits=5))  g_k=$(round.(g_k,digits=5))  α_k=$(round(α_k,digits=5))  ")
         y = x_k - α_k * g_k
         
         # ── (c) Project back onto feasible region ───────────────
         # The feasible region is a box: [x_lb, x_ub]
         # Projection is simply clamping each coordinate
+        println("y=$(round.(y,digits=5))  ")
         x_next = clamp.(y, x_lb, x_ub)
+        println("x_next=$(round.(x_next,digits=5))  ")
         
         # ── (d) Evaluate function at new point ──────────────────
         f_next, g_next = functionAndGradient(x_next)
@@ -162,10 +170,10 @@ function run_subgradient(; tol=1e-4, MaxIteration=1000)
         # ── (g) Print progress ──────────────────────────────────
         g_norm = sqrt(sum(g_next .^ 2))
         println("k=$(lpad(k,4))  x_k=$(round.(x_next,digits=5))  " *
-                "f(x_k)=$(round(f_next,digits=6))  " *
-                "f_best=$(round(f_best,digits=6))  " *
-                "α_k=$(round(α_k,digits=6))  " *
-                "||g||=$(round(g_norm,digits=6))")
+                "f(x_k)=$(round(f_next,digits=3))  " *
+                "f_best=$(round(f_best,digits=3))  " *
+                "α_k=$(round(α_k,digits=3))  " *
+                "||g||=$(round(g_norm,digits=3))")
         
         # ── (h) Check stopping criteria ────────────────────────
         # Stop if gradient is very small (near stationary point)

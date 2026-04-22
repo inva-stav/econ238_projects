@@ -54,7 +54,7 @@ set_optimizer_attribute(expansion_model, "ipm_optimality_tolerance",     OPT_TOL
 
 @variable(expansion_model, g[i=1:n_gen, t=1:t_steps] >= 0)
 @variable(expansion_model, -1 * f_lim <= f[l=1:n_lines, t=1:t_steps] <= f_lim)
-@variable(expansion_model, 0 <= Capacity_gen[i=1:n_gen] <= 1e8) # Generator Capacity Limits, do we want to make this an integer variable? or maybe make the lines integer variables?
+@variable(expansion_model, 0 <= Capacity_gen[i=1:n_gen] <= 1e4) # Generator Capacity Limits, do we want to make this an integer variable? or maybe make the lines integer variables?
 
 @objective(expansion_model, Min, sum(g_opex[i]*g[i,t] for i=1:n_gen, t=1:t_steps) + sum(g_capex[i] * Capacity_gen[i] for i=1:n_gen))
 
@@ -128,10 +128,9 @@ end
 #   where Q(x) = min dispatch cost s.t. g[i,t] <= x[i] + balance + flow limits
 # Envelope theorem:  ∂Q/∂x[i] = sum_t dual(gen_op_lim[i,t])   (≤ 0 in JuMP's
 # convention for a ≤-constraint in a min problem).
-alg = "kelley"
 n   = n_gen
 
-x_lb = zeros(n)
+x_lb = fill(0.01,n)
 x_ub = fill(1.0e5, n)   # loose upper bound on capacity
 
 # ── Parameterized inner dispatch LP (built once) ────────────────
@@ -180,8 +179,8 @@ function functionAndGradient(x)
     return f_val, grad
 end
 
-
-prob_num = "6benders"
+alg = "both"
+prob_num = "6$(alg)"
 out_dir  = joinpath(@__DIR__, "results", "problem$(prob_num)")
 mkpath(out_dir)
 
