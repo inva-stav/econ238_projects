@@ -12,14 +12,6 @@ include(joinpath(@__DIR__, "save_outputs.jl"))
 # Optional kwargs let us add indexed balance-style epigraph constraints as
 # cutting planes.  The epigraph *variables themselves* live inside x (baked
 # into the problem definition, e.g. problem 6), so the objective is untouched.
-#
-#   balance_indices : iterable of identifiers, e.g. [(node, t) for node in 1:n_nodes, t in 1:t_steps]
-#   balance_oracle  : function (x, idx) -> (value, gradient, j_epi)
-#                       value     = residual c_idx(x)
-#                       gradient  = ∇c_idx(x)           (length n)
-#                       j_epi     = index into x of the epigraph variable for idx
-#   balance_kind    : :eq for c(x) == 0  (cuts on both +c and -c; drives x[j] → 0)
-#                     :le for c(x) ≤ 0   (single cut)
 function run_kelley(; tol=1e-4, MaxIteration=1000, logscale::Bool=false)
     t_start = time()
     k  = 1
@@ -85,9 +77,9 @@ end
 
 # ── Dispatch helper ──────────────────────────────────────────────
 # Each problem file calls this after defining its globals.
-function run_algorithm(; logscale::Bool=false)
+function run_algorithm(; logscale::Bool=false, tol=1e-4)
     if alg in ("kelley", "both")
-        run_kelley(logscale=logscale)
+        run_kelley(logscale=logscale,  tol=1e-4)
     end
-    if alg in ("subgradient", "both"); run_subgradient(); end
+    if alg in ("subgradient", "both"); run_subgradient( tol=1e-4); end
 end

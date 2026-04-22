@@ -16,6 +16,10 @@ function save_outputs(X, F, G, LB, UB, x_best, k, cpu_time, alg; logscale::Bool=
     CSV.write(joinpath(out_dir, "iteration_data_$(alg).csv"),
         DataFrame(Iteration=1:k, LowerBound=LB, UpperBound=UB, OracleValue=F, Gap=UB.-LB))
 
+    # Best-iterate decision vector (x*) — mirrors capacities CSV from HiGHS run.
+    CSV.write(joinpath(out_dir, "capacities_$(alg).csv"),
+        DataFrame(Index=1:length(x_best), Value=collect(x_best)))
+
     # Convergence plot: UB/LB on left axis, gap on right axis (approaches 0).
     ks = 2:k
     yscale = logscale ? :log10 : :identity

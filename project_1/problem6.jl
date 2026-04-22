@@ -59,42 +59,59 @@ expansion_model = Model(HiGHS.Optimizer)
 @constraint(expansion_model, demand_balance_n2[t=1:t_steps],
     g[3,t] - demand[2][t] - f[1,t] == 0)
 
-optimize!(expansion_model)
+highs_time = @elapsed optimize!(expansion_model)
+
+prob_num = "6highs"
+out_dir  = joinpath(@__DIR__, "results", "problem$(prob_num)")
+mkpath(out_dir)
 
 if termination_status(expansion_model) == MOI.OPTIMAL
-    println("Reference LP optimal!  obj = ", objective_value(expansion_model))
+    obj_val    = objective_value(expansion_model)
     g_values   = value.(g)
     f_values   = value.(f)
     cap_values = value.(Capacity_gen)
+    capex_cost = sum(g_capex[i] * cap_values[i] for i in 1:n_gen)
+    opex_cost  = obj_val - capex_cost
+
+    println("Reference LP optimal!  obj = ", obj_val, "  CPU = ", round(highs_time, digits=4), "s")
     println("\nGenerator outputs (g):")
-    for i in 1:n_gen
-        println("  Generator $(i): ", g_values[i,:])
-    end
+    for i in 1:n_gen; println("  Generator $(i): ", g_values[i,:]); end
     println("\nLine flows (f):")
-    for i in 1:n_lines
-        println("  Line $(i): ", f_values[i,:])
-    end
+    for l in 1:n_lines; println("  Line $(l): ", f_values[l,:]); end
     println("\nInstalled capacities: ", cap_values)
+
+    # Summary — same columns as Kelley's summary CSV.
+    CSV.write(joinpath(out_dir, "summary_highs.csv"),
+        DataFrame(Algorithm=["highs"], FinalObjective=[obj_val],
+                  FinalGap=[0.0], Iterations=[1],
+                  CPUTime_s=[round(highs_time, digits=4)],
+                  CapexCost=[capex_cost], OpexCost=[opex_cost]))
+
+    # Installed capacities (the decision variable x* in Kelley terms).
+    CSV.write(joinpath(out_dir, "capacities_highs.csv"),
+        DataFrame(Generator=1:n_gen, Capacity=collect(cap_values),
+                  Capex=g_capex, Opex=g_opex))
+
+    # Hourly dispatch.
+    dispatch_df = DataFrame(Hour=1:t_steps)
+    for i in 1:n_gen;   dispatch_df[!, "Gen$(i)"]  = g_values[i, :]; end
+    for l in 1:n_lines; dispatch_df[!, "Flow$(l)"] = f_values[l, :]; end
+    CSV.write(joinpath(out_dir, "dispatch_highs.csv"), dispatch_df)
 else
     println("Reference LP failed: ", termination_status(expansion_model))
 end
 
-# Generator dispatch plot (reference): all generators + capacity lines
-prob_num = 6
-out_dir  = joinpath(@__DIR__, "results", "problem$(prob_num)")
-mkpath(out_dir)
-
 if @isdefined(g_values)
     time_steps = 1:t_steps
     p = plot(xlabel="Time Step", ylabel="Generation (MW)",
-             title="Generator Dispatch — Reference LP", legend=:outertopright)
+             title="Generator Dispatch — HiGHS Reference", legend=:outertopright)
     for i in 1:n_gen
         color = palette(:tab10)[i]
         plot!(p, time_steps, g_values[i,:], label="Gen $(i)", lw=2, color=color)
         hline!(p, [cap_values[i]], label="Gen $(i) capacity",
                linestyle=:dash, color=color)
     end
-    savefig(p, joinpath(out_dir, "ref_dispatch.png"))
+    savefig(p, joinpath(out_dir, "dispatch_highs.png"))
     Plots.closeall()
 end
 
@@ -158,4 +175,43 @@ prob_num = "6benders"
 out_dir  = joinpath(@__DIR__, "results", "problem$(prob_num)")
 mkpath(out_dir)
 
-run_algorithm(logscale = true)
+run_algorithm(logscale = true, tol=1e-9)
+
+# ── HiGHS vs Kelley comparison ──────────────────────────────────
+kelley_caps = CSV.read(joinpath(out_dir, "capacities_kelley.csv"), DataFrame).Value
+functionAndGradient(kelley_caps)         # re-populate oracle_model at x*
+kelley_g = value.(g_d)
+kelley_f = value.(f_d)
+
+compare_dir = joinpath(@__DIR__, "results", "problem6compare")
+mkpath(compare_dir)
+
+highs_caps = collect(cap_values)
+CSV.write(joinpath(compare_dir, "capacities_compare.csv"),
+    DataFrame(Generator=1:n_gen, HiGHS=highs_caps, Kelley=kelley_caps,
+              AbsDiff=abs.(highs_caps .- kelley_caps)))
+
+# Capacity bar chart (side-by-side).
+p_cap = bar((1:n_gen) .- 0.2, highs_caps, bar_width=0.4, label="HiGHS",
+            xlabel="Generator", ylabel="Capacity (MW)",
+            title="Installed Capacity — HiGHS vs Kelley",
+            xticks=(1:n_gen, ["Gen $(i)" for i in 1:n_gen]),
+            legend=:topleft)
+bar!(p_cap, (1:n_gen) .+ 0.2, kelley_caps, bar_width=0.4, label="Kelley")
+savefig(p_cap, joinpath(compare_dir, "capacity_compare.png"))
+Plots.closeall()
+
+# Dispatch overlay: solid = HiGHS, dashed = Kelley.
+ts = 1:t_steps
+p_dis = plot(xlabel="Time Step", ylabel="Generation (MW)",
+             title="Dispatch — HiGHS (solid) vs Kelley (dashed)",
+             legend=:outertopright)
+for i in 1:n_gen
+    color = palette(:tab10)[i]
+    plot!(p_dis, ts, g_values[i,:], label="Gen $(i) HiGHS",  lw=2, color=color)
+    plot!(p_dis, ts, kelley_g[i,:], label="Gen $(i) Kelley", lw=2, color=color, linestyle=:dash)
+end
+savefig(p_dis, joinpath(compare_dir, "dispatch_compare.png"))
+Plots.closeall()
+
+println("Comparison written to $(compare_dir)/")
