@@ -35,6 +35,24 @@ function save_outputs(X, F, G, LB, UB, x_best, k, cpu_time, alg; logscale::Bool=
     savefig(p_conv, joinpath(out_dir, "convergence_$(alg).png"))
     Plots.closeall()
 
+    # Iterate trajectory: one line per component of x (e.g. capacity per gen).
+    X_mat = reduce(hcat, X)'  # rows = iterations, cols = dimensions
+    iter_df = DataFrame(Iteration=1:k)
+    for i in 1:size(X_mat, 2)
+        iter_df[!, "x$(i)"] = X_mat[:, i]
+    end
+    CSV.write(joinpath(out_dir, "iterates_$(alg).csv"), iter_df)
+
+    ylab_iter = logscale ? "x value (log10)" : "x value"
+    p_iter = plot(xlabel="Iteration", ylabel=ylab_iter,
+                  title="Iterates per dimension — $(titlecase(alg)) P$(prob_num)",
+                  legend=:outertopright, yscale=yscale)
+    for i in 1:size(X_mat, 2)
+        plot!(p_iter, 1:k, safe(X_mat[:, i]), label="x$(i)", lw=2, marker=:circle, ms=3)
+    end
+    savefig(p_iter, joinpath(out_dir, "iterates_$(alg).png"))
+    Plots.closeall()
+
     # Univariate function + cutting planes plot (n=1 only)
     if n == 1
         x_range = range(x_lb[1] - 0.1, x_ub[1] + 0.1, length=200)
