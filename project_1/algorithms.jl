@@ -20,17 +20,14 @@ include(joinpath(@__DIR__, "save_outputs.jl"))
 #                       j_epi     = index into x of the epigraph variable for idx
 #   balance_kind    : :eq for c(x) == 0  (cuts on both +c and -c; drives x[j] → 0)
 #                     :le for c(x) ≤ 0   (single cut)
-function run_kelley(; tol=1e-4, MaxIteration=1000,
-                      balance_indices=nothing,
-                      balance_oracle=nothing,
-                      balance_kind=:eq)
+function run_kelley(; tol=1e-4, MaxIteration=1000, logscale::Bool=false)
     t_start = time()
     k  = 1
     x1 = copy(x_lb)
     f1, g1 = functionAndGradient(x1)
 
     x_best = copy(x1)
-    LB = [-1.0e6]
+    LB = [-1.0e7]
     UB = [f1]
     F  = [f1];  G = [g1];  X = [x1]
 
@@ -42,24 +39,6 @@ function run_kelley(; tol=1e-4, MaxIteration=1000,
 
     # Initial cut on the main objective
     @constraint(model, θ >= F[1] + G[1]' * (x .- X[1]))
-
-    has_balance = balance_indices !== nothing && balance_oracle !== nothing
-
-    # Helper: add an epigraph cut for a single index at a given iterate
-    add_balance_cut! = (idx, x_ref) -> begin
-        v, gv, j = balance_oracle(x_ref, idx)
-        @constraint(model, x[j] >=  v + gv' * (x .- x_ref))
-        if balance_kind == :eq
-            @constraint(model, x[j] >= -v - gv' * (x .- x_ref))
-        end
-    end
-
-    # Initial cuts at x1
-    if has_balance
-        for idx in balance_indices
-            add_balance_cut!(idx, x1)
-        end
-    end
 
     println("k=$(lpad(k,4))")
     println("x_k=$(round.(x1,digits=3))")
@@ -83,14 +62,9 @@ function run_kelley(; tol=1e-4, MaxIteration=1000,
         push!(F, f_k); push!(G, g_k); push!(X, x_k)
         @constraint(model, θ >= F[end] + G[end]' * (x .- X[end]))
 
-        if has_balance
-            for idx in balance_indices
-                add_balance_cut!(idx, x_k)
-            end
-        end
     end
 
-    save_outputs(X, F, G, LB, UB, x_best, k, time()-t_start, "kelley")
+    save_outputs(X, F, G, LB, UB, x_best, k, time()-t_start, "kelley"; logscale=logscale)
 end
 
 # ── Subgradient algorithm (TODO) ────────────────────────────────
@@ -111,11 +85,9 @@ end
 
 # ── Dispatch helper ──────────────────────────────────────────────
 # Each problem file calls this after defining its globals.
-function dispatch(; balance_indices=nothing, balance_oracle=nothing, balance_kind=:eq)
+function run_algorithm(; logscale::Bool=false)
     if alg in ("kelley", "both")
-        run_kelley(balance_indices = balance_indices,
-                   balance_oracle  = balance_oracle,
-                   balance_kind    = balance_kind)
+        run_kelley(logscale=logscale)
     end
     if alg in ("subgradient", "both"); run_subgradient(); end
 end

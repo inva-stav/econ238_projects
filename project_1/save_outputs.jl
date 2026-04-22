@@ -6,7 +6,7 @@ using Plots
 using CSV
 using DataFrames
 
-function save_outputs(X, F, G, LB, UB, x_best, k, cpu_time, alg)
+function save_outputs(X, F, G, LB, UB, x_best, k, cpu_time, alg; logscale::Bool=false)
     # Summary table
     CSV.write(joinpath(out_dir, "summary_$(alg).csv"),
         DataFrame(Algorithm=[alg], FinalObjective=[UB[end]], FinalGap=[UB[end]-LB[end]],
@@ -16,12 +16,18 @@ function save_outputs(X, F, G, LB, UB, x_best, k, cpu_time, alg)
     CSV.write(joinpath(out_dir, "iteration_data_$(alg).csv"),
         DataFrame(Iteration=1:k, LowerBound=LB, UpperBound=UB, OracleValue=F, Gap=UB.-LB))
 
-    # Convergence plot: UB, LB, gap vs iteration (skip k=1: LB initialised to -1e6)
+    # Convergence plot: UB/LB on left axis, gap on right axis (approaches 0).
     ks = 2:k
-    p_conv = plot(ks, UB[2:end], label="UB", lw=2, xlabel="Iteration", ylabel="Objective",
-                  title="Convergence — $(titlecase(alg)) P$(prob_num)", legend=:topright)
-    plot!(p_conv, ks, LB[2:end],             label="LB",  lw=2)
-    plot!(p_conv, ks, (UB .- LB)[2:end],     label="Gap", lw=2, linestyle=:dash)
+    yscale = logscale ? :log10 : :identity
+    # On log scale, non-positive values become NaN so Plots just leaves gaps.
+    safe(ys) = logscale ? [y > 0 ? y : NaN for y in ys] : ys
+    p_conv = plot(ks, safe(UB[2:end]), label="UB", lw=2, color=1,
+                  xlabel="Iteration", ylabel="Objective", yscale=yscale,
+                  title="Convergence — $(titlecase(alg)) P$(prob_num)", legend=:topleft)
+    plot!(p_conv, ks, safe(LB[2:end]), label="LB", lw=2, color=2)
+    p_right = twinx(p_conv)
+    plot!(p_right, ks, safe((UB .- LB)[2:end]), label="Gap", lw=2,
+          linestyle=:dash, color=:red, yscale=yscale, ylabel="Gap", legend=:topright)
     savefig(p_conv, joinpath(out_dir, "convergence_$(alg).png"))
     Plots.closeall()
 
