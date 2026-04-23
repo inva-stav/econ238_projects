@@ -2,7 +2,7 @@
 include(joinpath(@__DIR__, "algorithms.jl"))
 
 prob_num = 2
-alg      = "kelley"
+alg      = "both"
 
 out_dir  = joinpath(@__DIR__, "results", "problem$(prob_num)")
 mkpath(out_dir)

@@ -18,7 +18,7 @@ g_capex = [100, 200, 80]
 
 incidence = [1, -1]
 
-f_lim = 500   # 1 GW line limit
+f_lim = 80
 
 # Shared optimality/feasibility tolerance — used for the HiGHS reference solve,
 # the inner dispatch oracle, and Kelley's UB–LB gap stopping criterion.
@@ -54,7 +54,7 @@ set_optimizer_attribute(expansion_model, "ipm_optimality_tolerance",     OPT_TOL
 
 @variable(expansion_model, g[i=1:n_gen, t=1:t_steps] >= 0)
 @variable(expansion_model, -1 * f_lim <= f[l=1:n_lines, t=1:t_steps] <= f_lim)
-@variable(expansion_model, 0 <= Capacity_gen[i=1:n_gen] <= 1e8) # Generator Capacity Limits, do we want to make this an integer variable? or maybe make the lines integer variables?
+@variable(expansion_model, 0 <= Capacity_gen[i=1:n_gen] <= 1e4) # Generator Capacity Limits, do we want to make this an integer variable? or maybe make the lines integer variables?
 
 @objective(expansion_model, Min, sum(g_opex[i]*g[i,t] for i=1:n_gen, t=1:t_steps) + sum(g_capex[i] * Capacity_gen[i] for i=1:n_gen))
 
@@ -128,11 +128,10 @@ end
 #   where Q(x) = min dispatch cost s.t. g[i,t] <= x[i] + balance + flow limits
 # Envelope theorem:  ∂Q/∂x[i] = sum_t dual(gen_op_lim[i,t])   (≤ 0 in JuMP's
 # convention for a ≤-constraint in a min problem).
-alg = "kelley"
 n   = n_gen
 
-x_lb = zeros(n)
-x_ub = fill(1.0e5, n)   # loose upper bound on capacity
+x_lb = fill(0.0, n)
+x_ub = fill(1.0e6, n)   # loose upper bound on capacity
 
 # ── Parameterized inner dispatch LP (built once) ────────────────
 # Slack s[nd,t] with VOLL penalty keeps the LP feasible at any x ≥ 0.
@@ -175,23 +174,32 @@ function functionAndGradient(x)
     # Calculate gradients by extracting from duals
     grad = zeros(n)
     for i in 1:n_gen
-        grad[i] = g_capex[i] + sum(dual(gen_op_lim[i,t]) for t in 1:t_steps)
+        dual_sum = sum(dual(gen_op_lim[i,t]) for t in 1:t_steps)
+        # println("Duals for gen_op_lim[$i,t]: ", [dual(gen_op_lim[i,t]) for t in 1:t_steps])
+        grad[i] = g_capex[i] + dual_sum
     end
+    # println("Function value: f(x)=$(round(f_val,digits=1))")
+    # println("Gradient components: ", grad)
     return f_val, grad
 end
 
-
-prob_num = "6benders"
+alg = "both"
+prob_num = "6$(alg)"
 out_dir  = joinpath(@__DIR__, "results", "problem$(prob_num)")
 mkpath(out_dir)
 
-run_algorithm(logscale = true, tol = OPT_TOL)
+dispatch(logscale = true, tol = OPT_TOL)
 
-# ── HiGHS vs Kelley comparison ──────────────────────────────────
+# ── HiGHS vs Kelley vs Subgradient comparison ──────────────────
 kelley_caps = CSV.read(joinpath(out_dir, "capacities_kelley.csv"), DataFrame).Value
 functionAndGradient(kelley_caps)         # re-populate oracle_model at x*
 kelley_g = value.(g_d)
 kelley_f = value.(f_d)
+
+subgrad_caps = CSV.read(joinpath(out_dir, "capacities_subgradient.csv"), DataFrame).Value
+functionAndGradient(subgrad_caps)
+subgrad_g = value.(g_d)
+subgrad_f = value.(f_d)
 
 compare_dir = joinpath(@__DIR__, "results", "problem6compare")
 mkpath(compare_dir)
@@ -199,27 +207,31 @@ mkpath(compare_dir)
 highs_caps = collect(cap_values)
 CSV.write(joinpath(compare_dir, "capacities_compare.csv"),
     DataFrame(Generator=1:n_gen, HiGHS=highs_caps, Kelley=kelley_caps,
-              AbsDiff=abs.(highs_caps .- kelley_caps)))
+              Subgradient=subgrad_caps,
+              AbsDiff_Kelley=abs.(highs_caps .- kelley_caps),
+              AbsDiff_Subgradient=abs.(highs_caps .- subgrad_caps)))
 
 # Capacity bar chart (side-by-side).
-p_cap = bar((1:n_gen) .- 0.2, highs_caps, bar_width=0.4, label="HiGHS",
+p_cap = bar((1:n_gen) .- 0.25, highs_caps, bar_width=0.25, label="HiGHS",
             xlabel="Generator", ylabel="Capacity (MW)",
-            title="Installed Capacity — HiGHS vs Kelley",
+            title="Installed Capacity — HiGHS vs Kelley vs Subgradient",
             xticks=(1:n_gen, ["Gen $(i)" for i in 1:n_gen]),
             legend=:topleft)
-bar!(p_cap, (1:n_gen) .+ 0.2, kelley_caps, bar_width=0.4, label="Kelley")
+bar!(p_cap, (1:n_gen), kelley_caps, bar_width=0.25, label="Kelley")
+bar!(p_cap, (1:n_gen) .+ 0.25, subgrad_caps, bar_width=0.25, label="Subgradient")
 savefig(p_cap, joinpath(compare_dir, "capacity_compare.png"))
 Plots.closeall()
 
-# Dispatch overlay: solid = HiGHS, dashed = Kelley.
+# Dispatch overlay: solid = HiGHS, dashed = Kelley, dotted = Subgradient.
 ts = 1:t_steps
 p_dis = plot(xlabel="Time Step", ylabel="Generation (MW)",
-             title="Dispatch — HiGHS (solid) vs Kelley (dashed)",
+             title="Dispatch — HiGHS (solid), Kelley (dashed), Subgradient (dotted)",
              legend=:outertopright)
 for i in 1:n_gen
     color = palette(:tab10)[i]
-    plot!(p_dis, ts, g_values[i,:], label="Gen $(i) HiGHS",  lw=2, color=color)
-    plot!(p_dis, ts, kelley_g[i,:], label="Gen $(i) Kelley", lw=2, color=color, linestyle=:dash)
+    plot!(p_dis, ts, g_values[i,:],   label="Gen $(i) HiGHS",       lw=2, color=color)
+    plot!(p_dis, ts, kelley_g[i,:],   label="Gen $(i) Kelley",      lw=2, color=color, linestyle=:dash)
+    plot!(p_dis, ts, subgrad_g[i,:],  label="Gen $(i) Subgradient", lw=2, color=color, linestyle=:dot)
 end
 savefig(p_dis, joinpath(compare_dir, "dispatch_compare.png"))
 Plots.closeall()

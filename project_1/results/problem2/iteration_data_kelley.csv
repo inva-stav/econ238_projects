@@ -1,0 +1,3 @@
+Iteration,LowerBound,UpperBound,OracleValue,Gap
+1,-1.0e7,1.0,1.0,1.0000001e7
+2,1.0,1.0,1.0,0.0
