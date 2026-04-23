@@ -60,8 +60,12 @@ function run_kelley(; tol=1e-4, MaxIteration=1000, logscale::Bool=false)
 end
 
 # ── Subgradient algorithm ────────────────────────────────────────
-function run_subgradient(; tol=1e-4, MaxIteration=50)
-    
+function run_subgradient(; tol=1e-4, MaxIteration=1000)
+    # write large print line to signify start of subgradient algorithm
+    println("\n" * "="^80)
+    println("Starting subgradient algorithm with tol=$(tol) and MaxIteration=$(MaxIteration)")
+    println("="^80 * "\n")
+    N_DIGITS_PRINT = 1  # for rounding in print statements
     # Outline:
     #   1. x1 = copy(x_lb); f1, g1 = functionAndGradient(x1); UB = f1; x_best = x1
     #   2. For k = 1, ..., MaxIteration:
@@ -78,12 +82,12 @@ function run_subgradient(; tol=1e-4, MaxIteration=50)
     
     # ── Step 1: Initialize ──────────────────────────────────────
     # Start at the lower bound of the feasible region
-    x_k = copy(x_lb + x_ub) / 2  # Midpoint initialization (can also try x_lb or random)
+    x_k = copy(x_lb)  # Midpoint initialization (can also try x_lb or random)
     
     # Evaluate the function and gradient at the initial point
     f_k, g_k = functionAndGradient(x_k)
-    println("Function value at initial point: f(x_k)=$(round(f_k,digits=3))")
-    println("Gradient at initial point: g_k=$(round.(g_k,digits=3))")
+    println("Function value at initial point: f(x_k)=$(round(f_k,digits=N_DIGITS_PRINT))")
+    println("Gradient at initial point: g_k=$(round.(g_k,digits=N_DIGITS_PRINT))")
     
     # Initialize the best solution found so far
     # Upper bound (UB) is the best objective value we've seen
@@ -106,7 +110,7 @@ function run_subgradient(; tol=1e-4, MaxIteration=50)
     # ── Step 2: Choose step-size rule parameters ────────────────
     # We'll use a diminishing step size: α_k = α₀ / sqrt(k)
     # This guarantees convergence for convex functions
-    α₀ = 1  # Initial step size (tune this if needed)
+    α₀ = 1e-1  # Initial step size (tune this if needed)
     
     # Alternative: Polyak step size (commented out, but you can try it)
     # Requires an estimate of the optimal value f_opt
@@ -119,8 +123,8 @@ function run_subgradient(; tol=1e-4, MaxIteration=50)
     # Continue until gap is small or max iterations reached
     # Note: for subgradient, "gap" is just how much UB has changed recently
     # We'll use a simple stopping criterion: limited iterations or small gradient
-    println("k=$(lpad(k,4))  x_lb=$(round.(x_lb,digits=5)),
-      x_up=$(round.(x_ub,digits=5))" )
+    println("k=$(lpad(k,4))  x_lb=$(round.(x_lb,digits=N_DIGITS_PRINT)),
+      x_up=$(round.(x_ub,digits=N_DIGITS_PRINT))" )
 
     while k < MaxIteration
         # Increment iteration counter
@@ -138,15 +142,16 @@ function run_subgradient(; tol=1e-4, MaxIteration=50)
         # ── (b) Take a subgradient step ─────────────────────────
         # Move in the negative subgradient direction (descent)
         # For minimization: x_new = x_old - α * g
-        println("x_k=$(round.(x_k,digits=5))  g_k=$(round.(g_k,digits=5))  α_k=$(round(α_k,digits=5))  ")
-        y = x_k - α_k * g_k
+        println("x_k=$(round.(x_k,digits=N_DIGITS_PRINT))  g_k=$(round.(g_k,digits=N_DIGITS_PRINT))  α_k=$(round(α_k,digits=N_DIGITS_PRINT))  ")
+        clamped_g_k = clamp.(g_k, -1.0e2, 1.0e2)  # Optional: prevent extreme steps from huge gradients
+        y = x_k - α_k * clamped_g_k
         
         # ── (c) Project back onto feasible region ───────────────
         # The feasible region is a box: [x_lb, x_ub]
         # Projection is simply clamping each coordinate
-        println("y=$(round.(y,digits=5))  ")
+        println("y=$(round.(y,digits=N_DIGITS_PRINT))  ")
         x_next = clamp.(y, x_lb, x_ub)
-        println("x_next=$(round.(x_next,digits=5))  ")
+        println("x_next=$(round.(x_next,digits=N_DIGITS_PRINT))  ")
         
         # ── (d) Evaluate function at new point ──────────────────
         f_next, g_next = functionAndGradient(x_next)
@@ -169,11 +174,11 @@ function run_subgradient(; tol=1e-4, MaxIteration=50)
         
         # ── (g) Print progress ──────────────────────────────────
         g_norm = sqrt(sum(g_next .^ 2))
-        println("k=$(lpad(k,4))  x_k=$(round.(x_next,digits=5))  " *
-                "f(x_k)=$(round(f_next,digits=3))  " *
-                "f_best=$(round(f_best,digits=3))  " *
-                "α_k=$(round(α_k,digits=3))  " *
-                "||g||=$(round(g_norm,digits=3))")
+        println("k=$(lpad(k,4))  x_k=$(round.(x_next,digits=N_DIGITS_PRINT))  " *
+                "f(x_k)=$(round(f_next,digits=N_DIGITS_PRINT))  " *
+                "f_best=$(round(f_best,digits=N_DIGITS_PRINT))  " *
+                "α_k=$(round(α_k,digits=6))  " *
+                "||g||=$(round(g_norm,digits=N_DIGITS_PRINT))")
         
         # ── (h) Check stopping criteria ────────────────────────
         # Stop if gradient is very small (near stationary point)
@@ -183,16 +188,22 @@ function run_subgradient(; tol=1e-4, MaxIteration=50)
         end
         
         # Stop if step size becomes too small
-        if α_k < 1e-8
+        if α_k < 1e-5
             println("Stopped: step size too small")
             break
         end
         
         # Stop if objective hasn't improved in a while (optional)
-        # if k > 50 && abs(UB[end] - UB[end-50]) < tol
-        #     println("Stopped: no improvement in 50 iterations")
-        #     break
-        # end
+        if k > 50 && abs(UB[end] - UB[end-10]) < tol
+            println("Stopped: no improvement in 50 iterations")
+            break
+        end
+
+        # Stop if f_best has been the same for many iterations (optional)
+        if k > 50 && abs(f_best - UB[end-5]) < tol
+            println("Stopped: f_best hasn't improved in 50 iterations")
+            break
+        end
         
         # ── (i) Prepare for next iteration ──────────────────────
         x_k = x_next
@@ -212,7 +223,7 @@ function run_subgradient(; tol=1e-4, MaxIteration=50)
     println("  Best objective: $(f_best)")
     println("  Best solution:  $(x_best)")
     println("  Iterations:     $(k)")
-    println("  CPU time:       $(round(cpu_time, digits=4))s")
+    println("  CPU time:       $(round(cpu_time, digits=N_DIGITS_PRINT))s")
 end
 
 # ── Dispatch helper ──────────────────────────────────────────────

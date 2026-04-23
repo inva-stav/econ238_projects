@@ -1,2 +1,2 @@
 Algorithm,FinalObjective,FinalGap,Iterations,CPUTime_s
-subgradient,2.16964853365907e7,2.26964853365907e7,50,0.6226
+subgradient,5.136234630665207e6,6.136234630665207e6,168,1.8224

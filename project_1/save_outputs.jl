@@ -28,10 +28,12 @@ function save_outputs(X, F, G, LB, UB, x_best, k, cpu_time, alg; logscale::Bool=
     p_conv = plot(ks, safe(UB[2:end]), label="UB", lw=2, color=1,
                   xlabel="Iteration", ylabel="Objective", yscale=yscale,
                   title="Convergence — $(titlecase(alg)) P$(prob_num)", legend=:topleft)
-    plot!(p_conv, ks, safe(LB[2:end]), label="LB", lw=2, color=2)
-    p_right = twinx(p_conv)
-    plot!(p_right, ks, safe((UB .- LB)[2:end]), label="Gap", lw=2,
-          linestyle=:dash, color=:red, yscale=yscale, ylabel="Gap", legend=:topright)
+    if alg != "subgradient"
+        plot!(p_conv, ks, safe(LB[2:end]), label="LB", lw=2, color=2)
+        p_right = twinx(p_conv)
+        plot!(p_right, ks, safe((UB .- LB)[2:end]), label="Gap", lw=2,
+              linestyle=:dash, color=:red, yscale=yscale, ylabel="Gap", legend=:topright)
+    end
     savefig(p_conv, joinpath(out_dir, "convergence_$(alg).png"))
     Plots.closeall()
 
