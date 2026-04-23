@@ -49,8 +49,11 @@ function save_outputs(X, F, G, LB, UB, x_best, k, cpu_time, alg; logscale::Bool=
     p_iter = plot(xlabel="Iteration", ylabel=ylab_iter,
                   title="Iterates per dimension — $(titlecase(alg)) P$(prob_num)",
                   legend=:outertopright, yscale=yscale)
+    # Subgradient marker strokes hide the fill color at small ms — drop the border there.
+    mstroke = alg == "subgradient" ? 0 : 1
     for i in 1:size(X_mat, 2)
-        plot!(p_iter, 1:k, safe(X_mat[:, i]), label="x$(i)", lw=2, marker=:circle, ms=3)
+        plot!(p_iter, 1:k, safe(X_mat[:, i]), label="x$(i)", lw=2,
+              marker=:circle, ms=3, markerstrokewidth=mstroke)
     end
     savefig(p_iter, joinpath(out_dir, "iterates_$(alg).png"))
     Plots.closeall()
