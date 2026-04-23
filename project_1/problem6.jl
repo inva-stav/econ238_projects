@@ -42,7 +42,13 @@ for nd in 1:n_demand
     resize!(demand[nd], t_steps)
 end
 
-# # ── Expansion Planning Problem ───────────────────────────────────
+# # ── Expansion Planning Problem (Solving the LP using HiGHS as Reference Case)────────
+
+# write large print line to signify start of subgradient algorithm
+println("\n" * "="^80)
+println("Solving LP with HiGHS as reference problem")
+println("="^80 * "\n")
+
 expansion_model = Model(HiGHS.Optimizer)
 set_optimizer_attribute(expansion_model, "primal_feasibility_tolerance", OPT_TOL)
 set_optimizer_attribute(expansion_model, "dual_feasibility_tolerance",   OPT_TOL)
@@ -118,7 +124,7 @@ if @isdefined(g_values)
     Plots.closeall()
 end
 
-# ── Kelley formulation (Benders-style) ──────────────────────────
+# ── Decomposed model formulation (Benders-style) ──────────────────────────
 # Outer decision x = installed generator capacities  (length n = n_gen)
 # f(x) = g_capex' x + Q(x)
 #   where Q(x) = min dispatch cost s.t. g[i,t] <= x[i] + balance + flow limits
@@ -185,6 +191,8 @@ out_dir  = joinpath(@__DIR__, "results", "problem$(prob_num)")
 mkpath(out_dir)
 
 dispatch(logscale = true, tol = OPT_TOL)
+
+
 
 # ── HiGHS vs Kelley vs Subgradient comparison ──────────────────
 kelley_caps = CSV.read(joinpath(out_dir, "capacities_kelley.csv"), DataFrame).Value

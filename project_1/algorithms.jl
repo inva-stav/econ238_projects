@@ -13,6 +13,12 @@ include(joinpath(@__DIR__, "save_outputs.jl"))
 # cutting planes.  The epigraph *variables themselves* live inside x (baked
 # into the problem definition, e.g. problem 6), so the objective is untouched.
 function run_kelley(; tol=1e-4, MaxIteration=1000, logscale::Bool=false)
+    
+    # write large print line to signify start of subgradient algorithm
+    println("\n" * "="^80)
+    println("Starting subgradient algorithm with tol=$(tol) and MaxIteration=$(MaxIteration)")
+    println("="^80 * "\n")
+    
     t_start = time()
     k  = 1
     x1 = copy(x_lb)
@@ -63,12 +69,17 @@ function run_kelley(; tol=1e-4, MaxIteration=1000, logscale::Bool=false)
     save_outputs(X, F, G, LB, UB, x_best, k, time()-t_start, "kelley"; logscale=logscale)
 end
 
-# ── Projected subgradient algorithm ─────────────────────────────
+# ── Projected subgradient algorithm (used by problem 1-5) ─────────────────────────────
 # step_rule = :polyak  →  α_k = max((f_k − UB) / ‖g_k‖², α₀/√k)
 #           = :diminishing →  α_k = α₀ / √k
 # Subgradient gives no LB, so LB stays at −1e6 throughout
 # and the run terminates only when k reaches MaxIteration.
 function run_subgradient_polyak(; tol=1e-4, MaxIteration=1000, α₀=1.0, step_rule=:polyak, ub_tol=-Inf)
+    # write large print line to signify start of subgradient algorithm
+    println("\n" * "="^80)
+    println("Starting subgradient algorithm with tol=$(tol) and MaxIteration=$(MaxIteration)")
+    println("="^80 * "\n")
+    
     t_start = time()
     k   = 1
     x_k = copy(x_lb)
