@@ -7,9 +7,10 @@ using CSV
 using DataFrames
 
 function save_outputs(X, F, G, LB, UB, x_best, k, cpu_time, alg; logscale::Bool=false)
-    # Summary table
+    # Summary table (gap is undefined for subgradient — no dual LB)
+    final_gap = alg == "subgradient" ? NaN : UB[end] - LB[end]
     CSV.write(joinpath(out_dir, "summary_$(alg).csv"),
-        DataFrame(Algorithm=[alg], FinalObjective=[UB[end]], FinalGap=[UB[end]-LB[end]],
+        DataFrame(Algorithm=[alg], FinalObjective=[UB[end]], FinalGap=[final_gap],
                   Iterations=[k], CPUTime_s=[round(cpu_time, digits=4)]))
 
     # Iteration data CSV
@@ -20,18 +21,19 @@ function save_outputs(X, F, G, LB, UB, x_best, k, cpu_time, alg; logscale::Bool=
     CSV.write(joinpath(out_dir, "capacities_$(alg).csv"),
         DataFrame(Index=1:length(x_best), Value=collect(x_best)))
 
-    # Convergence plot: UB/LB on left axis, gap on right axis (approaches 0).
+    # Convergence plot: UB always shown; LB/Gap only for Kelley (subgradient has no dual LB).
     ks = 2:k
     yscale = logscale ? :log10 : :identity
-    # On log scale, non-positive values become NaN so Plots just leaves gaps.
     safe(ys) = logscale ? [y > 0 ? y : NaN for y in ys] : ys
     p_conv = plot(ks, safe(UB[2:end]), label="UB", lw=2, color=1,
                   xlabel="Iteration", ylabel="Objective", yscale=yscale,
                   title="Convergence — $(titlecase(alg)) P$(prob_num)", legend=:topleft)
-    plot!(p_conv, ks, safe(LB[2:end]), label="LB", lw=2, color=2)
-    p_right = twinx(p_conv)
-    plot!(p_right, ks, safe((UB .- LB)[2:end]), label="Gap", lw=2,
-          linestyle=:dash, color=:red, yscale=yscale, ylabel="Gap", legend=:topright)
+    if alg != "subgradient"
+        plot!(p_conv, ks, safe(LB[2:end]), label="LB", lw=2, color=2)
+        p_right = twinx(p_conv)
+        plot!(p_right, ks, safe((UB .- LB)[2:end]), label="Gap", lw=2,
+              linestyle=:dash, color=:red, yscale=yscale, ylabel="Gap", legend=:topright)
+    end
     savefig(p_conv, joinpath(out_dir, "convergence_$(alg).png"))
     Plots.closeall()
 

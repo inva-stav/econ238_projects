@@ -54,32 +54,72 @@ function run_kelley(; tol=1e-4, MaxIteration=1000, logscale::Bool=false)
         push!(F, f_k); push!(G, g_k); push!(X, x_k)
         @constraint(model, θ >= F[end] + G[end]' * (x .- X[end]))
 
+        if has_balance
+            for idx in balance_indices
+                add_balance_cut!(idx, x_k)
+            end
+        end
     end
 
-    save_outputs(X, F, G, LB, UB, x_best, k, time()-t_start, "kelley"; logscale=logscale)
+    save_outputs(X, F, G, LB, UB, x_best, k, time()-t_start, "kelley")
 end
 
-# ── Subgradient algorithm (TODO) ────────────────────────────────
-function run_subgradient(; tol=1e-4, MaxIteration=1000)
-    # TODO: implement projected subgradient method
-    # Outline:
-    #   1. x1 = copy(x_lb); f1, g1 = functionAndGradient(x1); UB = f1; x_best = x1
-    #   2. For k = 1, ..., MaxIteration:
-    #        a. Gradient step:   y       = x_k - α_k * g_k
-    #        b. Project onto X:  x_{k+1} = clamp.(y, x_lb, x_ub)
-    #        c. f_{k+1}, g_{k+1} = functionAndGradient(x_{k+1})
-    #        d. UB = min(UB, f_{k+1}); update x_best if improved
-    #        e. Step size: e.g. α_k = α₀/√k  or Polyak step
-    #   3. No clean lower bound — LB stays at -1e6
-    #   4. Call save_outputs(..., "subgradient") when done
-    error("Subgradient method not yet implemented")
+# ── Projected subgradient algorithm ─────────────────────────────
+# step_rule = :polyak  →  α_k = max((f_k − UB) / ‖g_k‖², α₀/√k)
+#           = :diminishing →  α_k = α₀ / √k
+# Subgradient gives no LB, so LB stays at −1e6 throughout
+# and the run terminates only when k reaches MaxIteration.
+function run_subgradient(; tol=1e-4, MaxIteration=1000, α₀=1.0, step_rule=:polyak,
+                           ub_tol=-Inf)
+    t_start = time()
+    k   = 1
+    x_k = copy(x_lb)
+    f_k, g_k = functionAndGradient(x_k)
+
+    x_best = copy(x_k)
+    LB = [-1.0e6]
+    UB = [f_k]
+    F  = [f_k];  G = [g_k];  X = [x_k]
+
+    # ub_tol: stop early when UB ≤ ub_tol (e.g. 1e-6 when f*=0); -Inf disables.
+    while (UB[end] - LB[end] > tol) && (k < MaxIteration) && (UB[end] > ub_tol)
+        # Polyak step using current best UB as f* estimate; fall back to
+        # α₀/√k when the current point already achieves the best UB (step = 0).
+        g_sq = g_k'g_k
+        if step_rule == :polyak && g_sq > 1e-14
+            α_k = max((f_k - UB[end]) / g_sq, α₀ / sqrt(k))
+        else
+            α_k = α₀ / sqrt(k)
+        end
+
+        # subgradient step and projection onto box X
+        x_k = clamp.(x_k .- α_k .* g_k, x_lb, x_ub)
+        k  += 1
+        f_k, g_k = functionAndGradient(x_k)
+
+        push!(LB, -1.0e6)
+        if f_k < UB[end]; x_best = copy(x_k); end
+        push!(UB, min(UB[end], f_k))
+        push!(F, f_k); push!(G, g_k); push!(X, x_k)
+
+        # suppresses print statements for n > 4, otherwise it'll be too much
+        if n <= 4
+            println("k=$(lpad(k,4))  x_k=$(round.(x_k,digits=5))  UB=$(round(UB[end],digits=6))  α=$(round(α_k,digits=6))")
+        else
+            println("k=$(lpad(k,4))  UB=$(round(UB[end],digits=6))  α=$(round(α_k,digits=6))")
+        end
+    end
+
+    save_outputs(X, F, G, LB, UB, x_best, k, time()-t_start, "subgradient")
 end
 
 # ── Dispatch helper ──────────────────────────────────────────────
 # Each problem file calls this after defining its globals.
-function run_algorithm(; logscale::Bool=false, tol=1e-4)
+# ub_tol is forwarded to run_subgradient for early stopping when f*=0.
+function dispatch(; balance_indices=nothing, balance_oracle=nothing, balance_kind=:eq,
+                    ub_tol=-Inf)
     if alg in ("kelley", "both")
         run_kelley(logscale=logscale, tol=tol)
     end
-    if alg in ("subgradient", "both"); run_subgradient(tol=tol); end
+    if alg in ("subgradient", "both"); run_subgradient(ub_tol=ub_tol); end
 end
