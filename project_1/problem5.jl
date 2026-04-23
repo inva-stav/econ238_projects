@@ -5,7 +5,7 @@ include(joinpath(@__DIR__, "algorithms.jl"))
 using Random
 
 prob_num = 5
-alg      = "kelley"
+alg      = "both"
 
 m_affine = 20
 seed     = 42

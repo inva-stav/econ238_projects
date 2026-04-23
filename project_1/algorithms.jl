@@ -87,20 +87,37 @@ function run_kelley(; tol=1e-4, MaxIteration=1000,
     save_outputs(X, F, G, LB, UB, x_best, k, time()-t_start, "kelley")
 end
 
-# ── Subgradient algorithm (TODO) ────────────────────────────────
-function run_subgradient(; tol=1e-4, MaxIteration=1000)
-    # TODO: implement projected subgradient method
-    # Outline:
-    #   1. x1 = copy(x_lb); f1, g1 = functionAndGradient(x1); UB = f1; x_best = x1
-    #   2. For k = 1, ..., MaxIteration:
-    #        a. Gradient step:   y       = x_k - α_k * g_k
-    #        b. Project onto X:  x_{k+1} = clamp.(y, x_lb, x_ub)
-    #        c. f_{k+1}, g_{k+1} = functionAndGradient(x_{k+1})
-    #        d. UB = min(UB, f_{k+1}); update x_best if improved
-    #        e. Step size: e.g. α_k = α₀/√k  or Polyak step
-    #   3. No clean lower bound — LB stays at -1e6
-    #   4. Call save_outputs(..., "subgradient") when done
-    error("Subgradient method not yet implemented")
+# ── Projected subgradient algorithm ─────────────────────────────
+function run_subgradient(; tol=1e-4, MaxIteration=1000, α₀=1.0)
+    t_start = time()
+
+    x_k    = copy(x_lb)
+    f_k, g_k = functionAndGradient(x_k)
+
+    x_best = copy(x_k)
+    LB = [-1.0e6]
+    UB = [f_k]
+    F  = [f_k];  G = [g_k];  X = [x_k]
+
+    for k in 2:MaxIteration
+        α_k = α₀ / sqrt(k - 1)
+
+        y   = x_k .- α_k .* g_k
+        x_k = clamp.(y, x_lb, x_ub)
+        f_k, g_k = functionAndGradient(x_k)
+
+        push!(LB, -1.0e6)
+        if f_k < UB[end]; x_best = copy(x_k); end
+        push!(UB, min(UB[end], f_k))
+
+        push!(F, f_k); push!(G, g_k); push!(X, copy(x_k))
+
+        if k <= 20 || k % 100 == 0
+            println("k=$(lpad(k,4))  f_k=$(round(f_k,digits=6))  UB=$(round(UB[end],digits=6))")
+        end
+    end
+
+    save_outputs(X, F, G, LB, UB, x_best, length(UB), time()-t_start, "subgradient")
 end
 
 # ── Dispatch helper ──────────────────────────────────────────────
