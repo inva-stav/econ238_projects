@@ -63,57 +63,57 @@ function run_kelley(; tol=1e-4, MaxIteration=1000, logscale::Bool=false)
     save_outputs(X, F, G, LB, UB, x_best, k, time()-t_start, "kelley"; logscale=logscale)
 end
 
-# # ── Projected subgradient algorithm ─────────────────────────────
-# # step_rule = :polyak  →  α_k = max((f_k − UB) / ‖g_k‖², α₀/√k)
-# #           = :diminishing →  α_k = α₀ / √k
-# # Subgradient gives no LB, so LB stays at −1e6 throughout
-# # and the run terminates only when k reaches MaxIteration.
-# function run_subgradient(; tol=1e-4, MaxIteration=1000, α₀=1.0, step_rule=:polyak, ub_tol=-Inf)
-#     t_start = time()
-#     k   = 1
-#     x_k = copy(x_lb)
-#     f_k, g_k = functionAndGradient(x_k)
+# ── Projected subgradient algorithm ─────────────────────────────
+# step_rule = :polyak  →  α_k = max((f_k − UB) / ‖g_k‖², α₀/√k)
+#           = :diminishing →  α_k = α₀ / √k
+# Subgradient gives no LB, so LB stays at −1e6 throughout
+# and the run terminates only when k reaches MaxIteration.
+function run_subgradient_polyak(; tol=1e-4, MaxIteration=1000, α₀=1.0, step_rule=:polyak, ub_tol=-Inf)
+    t_start = time()
+    k   = 1
+    x_k = copy(x_lb)
+    f_k, g_k = functionAndGradient(x_k)
 
-#     x_best = copy(x_k)
-#     LB = [-1.0e6]
-#     UB = [f_k]
-#     F  = [f_k];  G = [g_k];  X = [x_k]
+    x_best = copy(x_k)
+    LB = [-1.0e6]
+    UB = [f_k]
+    F  = [f_k];  G = [g_k];  X = [x_k]
 
-#     # ub_tol: stop early when UB ≤ ub_tol (e.g. 1e-6 when f*=0); -Inf disables.
-#     while (UB[end] - LB[end] > tol) && (k < MaxIteration) && (UB[end] > ub_tol)
-#         # Polyak step using current best UB as f* estimate; fall back to
-#         # α₀/√k when the current point already achieves the best UB (step = 0).
-#         g_sq = g_k'g_k
-#         if step_rule == :polyak && g_sq > 1e-14
-#             α_k = max((f_k - UB[end]) / g_sq, α₀ / sqrt(k))
-#         else
-#             α_k = α₀ / sqrt(k)
-#         end
+    # ub_tol: stop early when UB ≤ ub_tol (e.g. 1e-6 when f*=0); -Inf disables.
+    while (UB[end] - LB[end] > tol) && (k < MaxIteration) && (UB[end] > ub_tol)
+        # Polyak step using current best UB as f* estimate; fall back to
+        # α₀/√k when the current point already achieves the best UB (step = 0).
+        g_sq = g_k'g_k
+        if step_rule == :polyak && g_sq > 1e-14
+            α_k = max((f_k - UB[end]) / g_sq, α₀ / sqrt(k))
+        else
+            α_k = α₀ / sqrt(k)
+        end
 
-#         # subgradient step and projection onto box X
-#         x_k = clamp.(x_k .- α_k .* g_k, x_lb, x_ub)
-#         k  += 1
-#         f_k, g_k = functionAndGradient(x_k)
+        # subgradient step and projection onto box X
+        x_k = clamp.(x_k .- α_k .* g_k, x_lb, x_ub)
+        k  += 1
+        f_k, g_k = functionAndGradient(x_k)
 
-#         push!(LB, -1.0e6)
-#         if f_k < UB[end]; x_best = copy(x_k); end
-#         push!(UB, min(UB[end], f_k))
-#         push!(F, f_k); push!(G, g_k); push!(X, x_k)
+        push!(LB, -1.0e6)
+        if f_k < UB[end]; x_best = copy(x_k); end
+        push!(UB, min(UB[end], f_k))
+        push!(F, f_k); push!(G, g_k); push!(X, x_k)
 
-#         # suppresses print statements for n > 4, otherwise it'll be too much
-#         if n <= 4
-#             println("k=$(lpad(k,4))  x_k=$(round.(x_k,digits=5))  UB=$(round(UB[end],digits=6))  α=$(round(α_k,digits=6))")
-#         else
-#             println("k=$(lpad(k,4))  UB=$(round(UB[end],digits=6))  α=$(round(α_k,digits=6))")
-#         end
-#     end
+        # suppresses print statements for n > 4, otherwise it'll be too much
+        if n <= 4
+            println("k=$(lpad(k,4))  x_k=$(round.(x_k,digits=5))  UB=$(round(UB[end],digits=6))  α=$(round(α_k,digits=6))")
+        else
+            println("k=$(lpad(k,4))  UB=$(round(UB[end],digits=6))  α=$(round(α_k,digits=6))")
+        end
+    end
 
-#     save_outputs(X, F, G, LB, UB, x_best, k, time()-t_start, "subgradient")
-# end
+    save_outputs(X, F, G, LB, UB, x_best, k, time()-t_start, "subgradient")
+end
 
 
-# ── Subgradient algorithm ────────────────────────────────────────
-function run_subgradient(; tol=1e-4, MaxIteration=1000)
+# ── Subgradient algorithm (diminishing step, used by problem 6) ─
+function run_subgradient_diminishing(; tol=1e-4, MaxIteration=2000)
     # write large print line to signify start of subgradient algorithm
     println("\n" * "="^80)
     println("Starting subgradient algorithm with tol=$(tol) and MaxIteration=$(MaxIteration)")
@@ -173,11 +173,6 @@ function run_subgradient(; tol=1e-4, MaxIteration=1000)
     k = 1
     
     # ── Step 3: Main iteration loop ─────────────────────────────
-    # Continue until gap is small or max iterations reached
-    # Note: for subgradient, "gap" is just how much UB has changed recently
-    # We'll use a simple stopping criterion: limited iterations or small gradient
-    println("k=$(lpad(k,4))  x_lb=$(round.(x_lb,digits=N_DIGITS_PRINT)),
-      x_up=$(round.(x_ub,digits=N_DIGITS_PRINT))" )
 
     while k < MaxIteration
         # Increment iteration counter
@@ -190,16 +185,16 @@ function run_subgradient(; tol=1e-4, MaxIteration=1000)
         # ── (b) Take a subgradient step ─────────────────────────
         # Move in the negative subgradient direction (descent)
         # For minimization: x_new = x_old - α * g
-        println("x_k=$(round.(x_k,digits=N_DIGITS_PRINT))  g_k=$(round.(g_k,digits=N_DIGITS_PRINT))  α_k=$(round(α_k,digits=N_DIGITS_PRINT))  ")
+        # println("x_k=$(round.(x_k,digits=N_DIGITS_PRINT))  g_k=$(round.(g_k,digits=N_DIGITS_PRINT))  α_k=$(round(α_k,digits=N_DIGITS_PRINT))  ")
         clamped_g_k = clamp.(g_k, -1.0e2, 1.0e2)  # Optional: prevent extreme steps from huge gradients
         y = x_k - α_k * clamped_g_k
         
         # ── (c) Project back onto feasible region ───────────────
         # The feasible region is a box: [x_lb, x_ub]
         # Projection is simply clamping each coordinate
-        println("y=$(round.(y,digits=N_DIGITS_PRINT))  ")
+        # println("y=$(round.(y,digits=N_DIGITS_PRINT))  ")
         x_next = clamp.(y, x_lb, x_ub)
-        println("x_next=$(round.(x_next,digits=N_DIGITS_PRINT))  ")
+        # println("x_next=$(round.(x_next,digits=N_DIGITS_PRINT))  ")
         
         # ── (d) Evaluate function at new point ──────────────────
         f_next, g_next = functionAndGradient(x_next)
@@ -222,7 +217,7 @@ function run_subgradient(; tol=1e-4, MaxIteration=1000)
         
         # ── (g) Print progress ──────────────────────────────────
         g_norm = sqrt(sum(g_next .^ 2))
-        println("k=$(lpad(k,4))  x_k=$(round.(x_next,digits=N_DIGITS_PRINT))  " *
+        println("k=$(lpad(k,4))" *
                 "f(x_k)=$(round(f_next,digits=N_DIGITS_PRINT))  " *
                 "f_best=$(round(f_best,digits=N_DIGITS_PRINT))  " *
                 "α_k=$(round(α_k,digits=6))  " *
@@ -242,7 +237,7 @@ function run_subgradient(; tol=1e-4, MaxIteration=1000)
         end
         
         # Stop if objective hasn't improved in a while (optional)
-        if k > 50 && abs(UB[end] - UB[end-10]) < tol
+        if k > 50 && abs(UB[end] - UB[end-50]) < tol
             println("Stopped: no improvement in 50 iterations")
             break
         end
@@ -282,5 +277,13 @@ function dispatch(; logscale::Bool=false, tol=1e-4, ub_tol=-Inf)
     if alg in ("kelley", "both")
         run_kelley(logscale=logscale, tol=tol)
     end
-    if alg in ("subgradient", "both"); run_subgradient(tol=tol); end
+    if alg in ("subgradient", "both")
+        # Problem 6 uses the diminishing-step subgradient; all other problems
+        # use the Polyak-step variant. prob_num may be a String ("6both") or Int.
+        if startswith(string(prob_num), "6")
+            run_subgradient_diminishing(tol=tol)
+        else
+            run_subgradient_polyak(tol=tol, ub_tol=ub_tol)
+        end
+    end
 end

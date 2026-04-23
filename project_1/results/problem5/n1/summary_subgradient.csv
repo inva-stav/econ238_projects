@@ -1,0 +1,2 @@
+Algorithm,FinalObjective,FinalGap,Iterations,CPUTime_s
+subgradient,0.9200214249578101,NaN,1000,0.0856

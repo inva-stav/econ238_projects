@@ -11,14 +11,10 @@ n_lines  = 1
 n_demand = 2
 t_steps  = 600 #can modify to make problem larger
 
-g_opex   = [30, 20, 40]
-g_capex = [100, 200, 80]
+g_opex   = [40, 30, 45]
+g_capex = [60, 325, 55]
 
-# g_max_cap = [100, 50, 500]   # Increased capacity for generator 3 to ensure feasibility
-
-incidence = [1, -1]
-
-f_lim = 80
+f_lim = 100
 
 # Shared optimality/feasibility tolerance — used for the HiGHS reference solve,
 # the inner dispatch oracle, and Kelley's UB–LB gap stopping criterion.
