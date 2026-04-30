@@ -1,5 +1,5 @@
 function coalition_costs(INV::Dict, P::Float64)
-    # reuse your compute_cost(s) but pass INV and P in
+    # reuse compute_cost(s) from problem_1.jl but pass INV and P in
     function compute_cost(s)
         model = Model(HiGHS.Optimizer)
         set_silent(model)

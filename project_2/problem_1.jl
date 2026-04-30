@@ -27,7 +27,7 @@ INV = Dict(
 )
 
 # Tariff
-P = 35.8564   # <-- you may need to tweak to match target costs (started with 80.0)
+P = 35.8564   # <-- tune these to match target costs (started with 80.0)
 
 
 ###################
