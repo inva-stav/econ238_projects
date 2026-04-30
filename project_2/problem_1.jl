@@ -21,13 +21,13 @@ L = [(1,0), (2,0), (1,2)]
 
 # Investment cost per MW (<-- tune these! (started with 40.0,50.0,10.0))
 INV = Dict(
-    (1,0)=>50.0,
-    (2,0)=>60.0,
-    (1,2)=>40.0
+    (1,0)=>54.1436,
+    (2,0)=>64.1436,
+    (1,2)=>50.0
 )
 
 # Tariff
-P = 40.0   # <-- you may need to tweak to match target costs (started with 80.0)
+P = 35.8564   # <-- you may need to tweak to match target costs (started with 80.0)
 
 
 ###################

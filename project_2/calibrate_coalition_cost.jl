@@ -103,12 +103,14 @@ function run_grid_search()
     println("Costs: ", coalition_costs(best_params.INV, best_params.P))
 end
 
-run_grid_search()
+#run_grid_search()
 
 
 ##########################################
 #### Use nonlin optimizer ##############
 
+#import Pkg
+#Pkg.add("Optim")
 using Optim
 
 function objective(x)
@@ -122,5 +124,5 @@ function objective(x)
     return calibration_error(INV, P)
 end
 
-#res = optimize(objective, [40.0, 50.0, 10.0, 50.0])
-#println(res.minimizer)
+res = optimize(objective, [50.0, 60.0, 40.0, 40.0])
+println(res.minimizer)
