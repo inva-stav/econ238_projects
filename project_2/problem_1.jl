@@ -132,9 +132,10 @@ set_silent(model)
 # Efficiency
 @constraint(model, sum(x[i] for i in N) == C[Dict(1=>1,2=>1)]) # total cost of grand coalition case must be allocated
 
-# Excess constraints
+# Excess constraints (exclude empty and grand coalitions:
+# empty has no players; grand coalition's excess is identically 0 by efficiency)
 for s in coalitions
-    if s != Dict(1=>0,2=>0)
+    if s != Dict(1=>0,2=>0) && s != Dict(1=>1,2=>1)
         @constraint(model,
             C[s] - sum(s[i]*x[i] for i in N) >= ε
         )
