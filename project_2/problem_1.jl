@@ -19,15 +19,15 @@ g = Dict(
 # Represent as (from,to)
 L = [(1,0), (2,0), (1,2)]
 
-# Investment cost per MW (<-- tune these! (started with 40.0,50.0,10.0))
+# Investment cost per MW 
 INV = Dict(
-    (1,0)=>54.1436,
-    (2,0)=>64.1436,
+    (1,0)=>90, #54.1436
+    (2,0)=>100, #64.1436
     (1,2)=>50.0
 )
 
 # Tariff
-P = 35.8564   # <-- tune these to match target costs (started with 80.0)
+P = 0   # 35.8564
 
 
 ###################
@@ -44,10 +44,10 @@ function compute_cost(s::Dict{Int,Int})
     @variable(model, G >= 0)
 
     # Helper: incidence
-    function incoming(i)
+    function incoming(i) # returns all lines that flow into node i
         [l for l in L if l[2] == i]
     end
-    function outgoing(i)
+    function outgoing(i) # returns all lines that flow out of node i
         [l for l in L if l[1] == i]
     end
 
@@ -155,3 +155,24 @@ println("ε = ", value(ε))
 #################
 
 # For two players first LP already gives nuceolus. For larger n, iteratively fix tight constraints and re-solve.
+
+
+########################################################################
+########################################################################
+### Observed Output for P1 on 4/30:
+########################################################################
+# Coalition costs:
+# Dict(2 => 0, 1 => 1) => 90.0
+# Dict(2 => 1, 1 => 1) => 120.0
+# Dict(2 => 1, 1 => 0) => 100.0
+# Dict(2 => 0, 1 => 0) => 0.0
+# Nucleolus solution (1st step):
+# x = 1-dimensional DenseAxisArray{Float64,1,...} with index sets:
+#     Dimension 1, [1, 2]
+# And data, a 2-element Vector{Float64}:
+#  55.0
+#  65.0
+# ε = 35.0
+########################################################################
+########################################################################
+########################################################################
