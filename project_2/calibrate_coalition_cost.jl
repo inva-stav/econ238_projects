@@ -1,3 +1,6 @@
+# Created for project 2, problem_1.jl
+# If INV and P are not known, use this script to calibrate them to match the target costs C(s) for the 3 coalitions.
+
 function coalition_costs(INV::Dict, P::Float64)
     # reuse compute_cost(s) from problem_1.jl but pass INV and P in
     function compute_cost(s)
