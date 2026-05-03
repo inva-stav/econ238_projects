@@ -176,3 +176,9 @@ println("ε = ", value(ε))
 ########################################################################
 ########################################################################
 ########################################################################
+
+################# Written explanation of the solution process ###
+# Both players win as their excess is each 35, with player 1's cost falling 
+# from 90 to 55 and player 2's cost falling from 100 to 65. In a two 
+# player game, the excess is always equal. The perfect anti-correlation 
+# in generation leads to the grand coalition only needing 0.5 MW of capacity on each line. 
