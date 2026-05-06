@@ -124,5 +124,7 @@ function run_p4(; month::Int = 1, T_hours::Int = 720, save::Bool = true)
     )
 end
 
-# to run
-run_p4()
+# to run (guard prevents auto-execution when this file is include'd by another script)
+if abspath(PROGRAM_FILE) == @__FILE__
+    run_p4()
+end
