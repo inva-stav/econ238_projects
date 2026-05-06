@@ -61,7 +61,7 @@ def plot_p1():
         mpatches.Patch(color="#2c7bb6", label="Substation (node 0)"),
         mpatches.Patch(color="#d7191c", label="Generator node"),
     ]
-    ax.legend(handles=legend_items, loc="lower left", fontsize=8, framealpha=0.9)
+    ax.legend(handles=legend_items, loc="lower left", fontsize=8, framealpha=0.9, bbox_to_anchor=(0, .1))
     ax.text(0.5, -0.30, f"C(N) = 120.0    x* = (55.0, 65.0)    ε* = 35.0",
             fontsize=9, ha="center", va="top", color="#444",
             bbox=dict(boxstyle="round,pad=0.3", fc="#f0f0f0", ec="#ccc"))
