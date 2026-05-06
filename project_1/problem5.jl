@@ -31,5 +31,5 @@ for n_val in [1, 2, 10, 100]
     end
 
     println("\n===  Problem 5, n = $n  ===")
-    run_algorithm()
+    dispatch()
 end
