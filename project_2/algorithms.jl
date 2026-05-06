@@ -1,24 +1,24 @@
 using JuMP
 using HiGHS
 using Printf
-using LinearAlgebra
 
 ###################################
 ### Coalition cost LP
 ###################################
 
-# Solves the coalition's transmission-investment LP and returns the full solution
-# (cost split into investment vs curtailment-penalty parts, line capacities,
-# peak injection, and per-(player, time) curtailment).
-#
-# Curtailment: when `λ_curtail` is finite, each member i is allowed to curtail
-# c[i,t] ∈ [0, g[i,t]] of its generation at hour t. The flow-conservation and
-# peak constraints see the *delivered* quantity g[i,t] − c[i,t], and the
-# objective gains a `λ_curtail · Σ c[i,t]` term so the LP doesn't degenerate
-# to "curtail everything." `λ_curtail = Inf` (default) skips the curtailment
-# variables entirely, recovering the original investment-only model.
-function solve_coalition_lp(s::Vector{Int}, N, T, g, L, INV;
-                            P::Float64 = 0.0, λ_curtail::Float64 = Inf)
+function compute_cost(s::Vector{Int}, N, T, g, L, INV;
+                      P::Float64 = 0.0,
+                      d::Union{Matrix{Float64}, Nothing} = nothing)
+    # s = binary membership vector: s[i] = 1 if player i is in the coalition, 0 otherwise
+    # g[i,t] = generation capacity factor at node i, time t
+    # d[i,t] = local demand at node i, time t (optional; defaults to zero → pure-export model)
+    # Decision variables: F[l] = capacity built on line l (MW),
+    #                     f[l,t] = flow on line l at time t (unrestricted sign = bidirectional),
+    #                     G = peak injection capacity at the substation.
+    n = length(N)
+    nT = length(T)
+    has_demand = d !== nothing
+
     model = Model(HiGHS.Optimizer)
     set_silent(model)
 
@@ -26,69 +26,50 @@ function solve_coalition_lp(s::Vector{Int}, N, T, g, L, INV;
     @variable(model, f[l in L, t in T])
     @variable(model, G >= 0)
 
-    use_curt = isfinite(λ_curtail)
-    if use_curt
-        @variable(model, c[i in N, t in T] >= 0)
-        # Non-members (s[i]=0) get c[i,t] <= 0 which forces c[i,t] = 0.
-        for i in N, t in T
-            @constraint(model, c[i, t] <= s[i] * g[i, t])
-        end
-    end
-
+    # Lines are stored as (from, to) pairs; flow is positive in the named direction.
     incoming(i) = [l for l in L if l[2] == i]
     outgoing(i) = [l for l in L if l[1] == i]
 
-    delivered(i, t) = use_curt ? (s[i] * g[i, t] - c[i, t]) : (s[i] * g[i, t])
+    # Net injection at node i, time t: generation minus local demand
+    net(i, t) = has_demand ? g[i, t] - d[i, t] : g[i, t]
 
+    # Flow conservation at each node:
+    # net flow leaving node i = s[i] * net(i,t)
+    # Positive net → node exports; negative net → node imports from the network
     for i in N, t in T
         @constraint(model,
             sum(f[l, t] for l in outgoing(i)) -
-            sum(f[l, t] for l in incoming(i)) == delivered(i, t)
+            sum(f[l, t] for l in incoming(i)) == s[i] * net(i, t)
         )
     end
 
+    # Flow conservation at substation node 0:
+    # absorbs net surplus or supplies net deficit of the coalition
     for t in T
         @constraint(model,
             sum(f[l, t] for l in incoming(0)) -
-            sum(f[l, t] for l in outgoing(0)) == sum(delivered(i, t) for i in N)
+            sum(f[l, t] for l in outgoing(0)) == sum(s[i] * net(i, t) for i in N)
         )
     end
 
+    # Bidirectional line capacity: flow in either direction cannot exceed built capacity
     for l in L, t in T
         @constraint(model, f[l, t] <=  F[l])
         @constraint(model, f[l, t] >= -F[l])
     end
 
+    # Peak substation capacity: G must cover the absolute net flow at node 0
+    # (bidirectional — substation may export to the coalition in hours of net deficit)
     for t in T
-        @constraint(model, G >= sum(delivered(i, t) for i in N))
+        net_t = sum(s[i] * net(i, t) for i in N)
+        @constraint(model, G >=  net_t)
+        @constraint(model, G >= -net_t)
     end
 
-    obj = sum(INV[l] * F[l] for l in L) + P * G
-    if use_curt
-        obj += λ_curtail * sum(c[i, t] for i in N, t in T)
-    end
-    @objective(model, Min, obj)
+    # Minimize total investment: line capacity costs + substation injection capacity cost
+    @objective(model, Min, sum(INV[l] * F[l] for l in L) + P * G)
     optimize!(model)
-
-    cost = objective_value(model)
-    F_vals = Dict(l => value(F[l]) for l in L)
-    G_val = value(G)
-    invest_cost = sum(INV[l] * F_vals[l] for l in L) + P * G_val
-    if use_curt
-        c_vals = Dict((i, t) => value(c[i, t]) for i in N, t in T)
-        curt_cost = cost - invest_cost
-    else
-        c_vals = Dict{Tuple{Int,Int}, Float64}()
-        curt_cost = 0.0
-    end
-    return (cost = cost, invest_cost = invest_cost, curt_cost = curt_cost,
-            F = F_vals, G = G_val, c = c_vals, λ_curtail = λ_curtail)
-end
-
-# Backward-compatible scalar-cost wrapper.
-function compute_cost(s::Vector{Int}, N, T, g, L, INV;
-                      P::Float64 = 0.0, λ_curtail::Float64 = Inf)
-    return solve_coalition_lp(s, N, T, g, L, INV; P=P, λ_curtail=λ_curtail).cost
+    return objective_value(model)
 end
 
 ###################################
@@ -126,8 +107,9 @@ end
 # Solves the coalition-cost LP for every subset and returns C keyed by member list.
 # e.g. C[[1,3]] = cost for coalition {1,3}
 function compute_all_costs(n::Int, N, T, g, L, INV;
-                           P::Float64 = 0.0, verbose::Bool = false,
-                           λ_curtail::Float64 = Inf)
+                           P::Float64 = 0.0,
+                           d::Union{Matrix{Float64}, Nothing} = nothing,
+                           verbose::Bool = false)
     coalitions = all_subsets(n)
     C          = Dict{Vector{Int}, Float64}()
     total      = length(coalitions)
@@ -135,46 +117,14 @@ function compute_all_costs(n::Int, N, T, g, L, INV;
         verbose && k % 128 == 0 &&
             println("    progress: $k / $total coalitions computed")
         s        = coalition_vector(coalition, n)
-        C[coalition] = compute_cost(s, N, T, g, L, INV; P=P, λ_curtail=λ_curtail)
+        C[coalition] = compute_cost(s, N, T, g, L, INV; P=P, d=d)
     end
     return C
-end
-
-# Same as compute_all_costs but keeps the full per-coalition solution
-# (cost, line caps, peak, curtailment matrix) for diagnostics.
-function compute_all_solutions(n::Int, N, T, g, L, INV;
-                               P::Float64 = 0.0, verbose::Bool = false,
-                               λ_curtail::Float64 = Inf)
-    coalitions = all_subsets(n)
-    sols       = Dict{Vector{Int}, NamedTuple}()
-    total      = length(coalitions)
-    for (k, coalition) in enumerate(coalitions)
-        verbose && k % 128 == 0 &&
-            println("    progress: $k / $total coalitions solved")
-        s = coalition_vector(coalition, n)
-        sols[coalition] = solve_coalition_lp(s, N, T, g, L, INV; P=P, λ_curtail=λ_curtail)
-    end
-    return sols
 end
 
 ###################################
 ### Sequential LP nucleolus
 ###################################
-
-# Rank of the system formed by the efficiency constraint plus the incidence rows of
-# every pinned coalition.  When this equals n the allocation x is uniquely determined.
-function coalition_rank(n::Int, fixed_coalitions)
-    rows = Vector{Vector{Float64}}()
-    push!(rows, ones(Float64, n))          # efficiency: sum(x) = C(N)
-    for s in fixed_coalitions
-        row = zeros(Float64, n)
-        for i in s
-            row[i] = 1.0
-        end
-        push!(rows, row)
-    end
-    return rank(reduce(vcat, transpose.(rows)))
-end
 
 function nucleolus_sequential_lp(n::Int, C::Dict{Vector{Int},Float64}; tol::Float64 = 1e-6)
     # The nucleolus is found by lexicographically maximizing the sorted vector of coalition excesses.
@@ -189,9 +139,8 @@ function nucleolus_sequential_lp(n::Int, C::Dict{Vector{Int},Float64}; tol::Floa
     fixed  = Dict{Vector{Int}, Float64}()  # coalition => locked excess value from a prior iteration
     x_star = zeros(n)
 
-    iter = 0
-    while !isempty(active) && coalition_rank(n, keys(fixed)) < n
-        iter += 1
+    for iter in 1:n
+        isempty(active) && break
 
         model = Model(HiGHS.Optimizer)
         set_silent(model)
@@ -227,9 +176,8 @@ function nucleolus_sequential_lp(n::Int, C::Dict{Vector{Int},Float64}; tol::Floa
             if abs(C[s] - sum(x_vals[i] for i in s) - ε_star) < tol
         )
 
-        @printf("  iter %d | ε* = %8.4f | tight = %d | active remaining = %d | rank = %d/%d\n",
-            iter, ε_star, length(tight), length(active) - length(tight),
-            coalition_rank(n, keys(fixed)), n)
+        @printf("  iter %d | ε* = %8.4f | tight = %d | active remaining = %d\n",
+            iter, ε_star, length(tight), length(active) - length(tight))
 
         isempty(tight) && break
 
