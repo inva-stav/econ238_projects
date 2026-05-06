@@ -6,11 +6,19 @@ using Printf
 ### Coalition cost LP
 ###################################
 
-function compute_cost(s::Vector{Int}, N, T, g, L, INV; P::Float64 = 0.0)
+function compute_cost(s::Vector{Int}, N, T, g, L, INV;
+                      P::Float64 = 0.0,
+                      d::Union{Matrix{Float64}, Nothing} = nothing)
     # s = binary membership vector: s[i] = 1 if player i is in the coalition, 0 otherwise
+    # g[i,t] = generation capacity factor at node i, time t
+    # d[i,t] = local demand at node i, time t (optional; defaults to zero → pure-export model)
     # Decision variables: F[l] = capacity built on line l (MW),
     #                     f[l,t] = flow on line l at time t (unrestricted sign = bidirectional),
     #                     G = peak injection capacity at the substation.
+    n = length(N)
+    nT = length(T)
+    has_demand = d !== nothing
+
     model = Model(HiGHS.Optimizer)
     set_silent(model)
 
@@ -22,22 +30,25 @@ function compute_cost(s::Vector{Int}, N, T, g, L, INV; P::Float64 = 0.0)
     incoming(i) = [l for l in L if l[2] == i]
     outgoing(i) = [l for l in L if l[1] == i]
 
-    # Flow conservation at each generation node:
-    # net flow leaving node i = s[i] * g[i,t]  (zero for non-members since s[i]=0)
+    # Net injection at node i, time t: generation minus local demand
+    net(i, t) = has_demand ? g[i, t] - d[i, t] : g[i, t]
+
+    # Flow conservation at each node:
+    # net flow leaving node i = s[i] * net(i,t)
+    # Positive net → node exports; negative net → node imports from the network
     for i in N, t in T
         @constraint(model,
             sum(f[l, t] for l in outgoing(i)) -
-            sum(f[l, t] for l in incoming(i)) == s[i] * g[i, t]
+            sum(f[l, t] for l in incoming(i)) == s[i] * net(i, t)
         )
     end
 
     # Flow conservation at substation node 0:
-    # net flow arriving at node 0 = total generation injected by the coalition
-    # (redundant given the generation-node constraints, but explicit for clarity)
+    # absorbs net surplus or supplies net deficit of the coalition
     for t in T
         @constraint(model,
             sum(f[l, t] for l in incoming(0)) -
-            sum(f[l, t] for l in outgoing(0)) == sum(s[i] * g[i, t] for i in N)
+            sum(f[l, t] for l in outgoing(0)) == sum(s[i] * net(i, t) for i in N)
         )
     end
 
@@ -47,9 +58,12 @@ function compute_cost(s::Vector{Int}, N, T, g, L, INV; P::Float64 = 0.0)
         @constraint(model, f[l, t] >= -F[l])
     end
 
-    # Peak injection capacity: G must cover the maximum total generation across all timesteps
+    # Peak substation capacity: G must cover the absolute net flow at node 0
+    # (bidirectional — substation may export to the coalition in hours of net deficit)
     for t in T
-        @constraint(model, G >= sum(s[i] * g[i, t] for i in N))
+        net_t = sum(s[i] * net(i, t) for i in N)
+        @constraint(model, G >=  net_t)
+        @constraint(model, G >= -net_t)
     end
 
     # Minimize total investment: line capacity costs + substation injection capacity cost
@@ -92,7 +106,10 @@ end
 
 # Solves the coalition-cost LP for every subset and returns C keyed by member list.
 # e.g. C[[1,3]] = cost for coalition {1,3}
-function compute_all_costs(n::Int, N, T, g, L, INV; P::Float64 = 0.0, verbose::Bool = false)
+function compute_all_costs(n::Int, N, T, g, L, INV;
+                           P::Float64 = 0.0,
+                           d::Union{Matrix{Float64}, Nothing} = nothing,
+                           verbose::Bool = false)
     coalitions = all_subsets(n)
     C          = Dict{Vector{Int}, Float64}()
     total      = length(coalitions)
@@ -100,7 +117,7 @@ function compute_all_costs(n::Int, N, T, g, L, INV; P::Float64 = 0.0, verbose::B
         verbose && k % 128 == 0 &&
             println("    progress: $k / $total coalitions computed")
         s        = coalition_vector(coalition, n)
-        C[coalition] = compute_cost(s, N, T, g, L, INV; P=P)
+        C[coalition] = compute_cost(s, N, T, g, L, INV; P=P, d=d)
     end
     return C
 end
