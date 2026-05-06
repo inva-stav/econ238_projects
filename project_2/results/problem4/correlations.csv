@@ -1,0 +1,5 @@
+measure,value,n_obs
+pearson_all_hours,0.027335,8760
+pearson_daytime,-0.012949,4324
+spearman_all_hours,-0.017230,8760
+pearson_daily_mean,-0.084516,365

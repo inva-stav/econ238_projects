@@ -6,11 +6,18 @@ using Printf
 ### Coalition cost LP
 ###################################
 
-function compute_cost(s::Vector{Int}, N, T, g, L, INV; P::Float64 = 0.0)
-    # s = binary membership vector: s[i] = 1 if player i is in the coalition, 0 otherwise
-    # Decision variables: F[l] = capacity built on line l (MW),
-    #                     f[l,t] = flow on line l at time t (unrestricted sign = bidirectional),
-    #                     G = peak injection capacity at the substation.
+# Solves the coalition's transmission-investment LP and returns the full solution
+# (cost split into investment vs curtailment-penalty parts, line capacities,
+# peak injection, and per-(player, time) curtailment).
+#
+# Curtailment: when `λ_curtail` is finite, each member i is allowed to curtail
+# c[i,t] ∈ [0, g[i,t]] of its generation at hour t. The flow-conservation and
+# peak constraints see the *delivered* quantity g[i,t] − c[i,t], and the
+# objective gains a `λ_curtail · Σ c[i,t]` term so the LP doesn't degenerate
+# to "curtail everything." `λ_curtail = Inf` (default) skips the curtailment
+# variables entirely, recovering the original investment-only model.
+function solve_coalition_lp(s::Vector{Int}, N, T, g, L, INV;
+                            P::Float64 = 0.0, λ_curtail::Float64 = Inf)
     model = Model(HiGHS.Optimizer)
     set_silent(model)
 
@@ -18,44 +25,69 @@ function compute_cost(s::Vector{Int}, N, T, g, L, INV; P::Float64 = 0.0)
     @variable(model, f[l in L, t in T])
     @variable(model, G >= 0)
 
-    # Lines are stored as (from, to) pairs; flow is positive in the named direction.
+    use_curt = isfinite(λ_curtail)
+    if use_curt
+        @variable(model, c[i in N, t in T] >= 0)
+        # Non-members (s[i]=0) get c[i,t] <= 0 which forces c[i,t] = 0.
+        for i in N, t in T
+            @constraint(model, c[i, t] <= s[i] * g[i, t])
+        end
+    end
+
     incoming(i) = [l for l in L if l[2] == i]
     outgoing(i) = [l for l in L if l[1] == i]
 
-    # Flow conservation at each generation node:
-    # net flow leaving node i = s[i] * g[i,t]  (zero for non-members since s[i]=0)
+    delivered(i, t) = use_curt ? (s[i] * g[i, t] - c[i, t]) : (s[i] * g[i, t])
+
     for i in N, t in T
         @constraint(model,
             sum(f[l, t] for l in outgoing(i)) -
-            sum(f[l, t] for l in incoming(i)) == s[i] * g[i, t]
+            sum(f[l, t] for l in incoming(i)) == delivered(i, t)
         )
     end
 
-    # Flow conservation at substation node 0:
-    # net flow arriving at node 0 = total generation injected by the coalition
-    # (redundant given the generation-node constraints, but explicit for clarity)
     for t in T
         @constraint(model,
             sum(f[l, t] for l in incoming(0)) -
-            sum(f[l, t] for l in outgoing(0)) == sum(s[i] * g[i, t] for i in N)
+            sum(f[l, t] for l in outgoing(0)) == sum(delivered(i, t) for i in N)
         )
     end
 
-    # Bidirectional line capacity: flow in either direction cannot exceed built capacity
     for l in L, t in T
         @constraint(model, f[l, t] <=  F[l])
         @constraint(model, f[l, t] >= -F[l])
     end
 
-    # Peak injection capacity: G must cover the maximum total generation across all timesteps
     for t in T
-        @constraint(model, G >= sum(s[i] * g[i, t] for i in N))
+        @constraint(model, G >= sum(delivered(i, t) for i in N))
     end
 
-    # Minimize total investment: line capacity costs + substation injection capacity cost
-    @objective(model, Min, sum(INV[l] * F[l] for l in L) + P * G)
+    obj = sum(INV[l] * F[l] for l in L) + P * G
+    if use_curt
+        obj += λ_curtail * sum(c[i, t] for i in N, t in T)
+    end
+    @objective(model, Min, obj)
     optimize!(model)
-    return objective_value(model)
+
+    cost = objective_value(model)
+    F_vals = Dict(l => value(F[l]) for l in L)
+    G_val = value(G)
+    invest_cost = sum(INV[l] * F_vals[l] for l in L) + P * G_val
+    if use_curt
+        c_vals = Dict((i, t) => value(c[i, t]) for i in N, t in T)
+        curt_cost = cost - invest_cost
+    else
+        c_vals = Dict{Tuple{Int,Int}, Float64}()
+        curt_cost = 0.0
+    end
+    return (cost = cost, invest_cost = invest_cost, curt_cost = curt_cost,
+            F = F_vals, G = G_val, c = c_vals, λ_curtail = λ_curtail)
+end
+
+# Backward-compatible scalar-cost wrapper.
+function compute_cost(s::Vector{Int}, N, T, g, L, INV;
+                      P::Float64 = 0.0, λ_curtail::Float64 = Inf)
+    return solve_coalition_lp(s, N, T, g, L, INV; P=P, λ_curtail=λ_curtail).cost
 end
 
 ###################################
@@ -92,7 +124,9 @@ end
 
 # Solves the coalition-cost LP for every subset and returns C keyed by member list.
 # e.g. C[[1,3]] = cost for coalition {1,3}
-function compute_all_costs(n::Int, N, T, g, L, INV; P::Float64 = 0.0, verbose::Bool = false)
+function compute_all_costs(n::Int, N, T, g, L, INV;
+                           P::Float64 = 0.0, verbose::Bool = false,
+                           λ_curtail::Float64 = Inf)
     coalitions = all_subsets(n)
     C          = Dict{Vector{Int}, Float64}()
     total      = length(coalitions)
@@ -100,9 +134,26 @@ function compute_all_costs(n::Int, N, T, g, L, INV; P::Float64 = 0.0, verbose::B
         verbose && k % 128 == 0 &&
             println("    progress: $k / $total coalitions computed")
         s        = coalition_vector(coalition, n)
-        C[coalition] = compute_cost(s, N, T, g, L, INV; P=P)
+        C[coalition] = compute_cost(s, N, T, g, L, INV; P=P, λ_curtail=λ_curtail)
     end
     return C
+end
+
+# Same as compute_all_costs but keeps the full per-coalition solution
+# (cost, line caps, peak, curtailment matrix) for diagnostics.
+function compute_all_solutions(n::Int, N, T, g, L, INV;
+                               P::Float64 = 0.0, verbose::Bool = false,
+                               λ_curtail::Float64 = Inf)
+    coalitions = all_subsets(n)
+    sols       = Dict{Vector{Int}, NamedTuple}()
+    total      = length(coalitions)
+    for (k, coalition) in enumerate(coalitions)
+        verbose && k % 128 == 0 &&
+            println("    progress: $k / $total coalitions solved")
+        s = coalition_vector(coalition, n)
+        sols[coalition] = solve_coalition_lp(s, N, T, g, L, INV; P=P, λ_curtail=λ_curtail)
+    end
+    return sols
 end
 
 ###################################
