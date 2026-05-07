@@ -1,6 +1,7 @@
 using JuMP
 using HiGHS
 using Printf
+using LinearAlgebra
 
 ###################################
 ### Coalition cost LP
@@ -160,6 +161,21 @@ end
 ### Sequential LP nucleolus
 ###################################
 
+# Rank of the system formed by the efficiency constraint plus the incidence rows of
+# every pinned coalition.  When this equals n the allocation x is uniquely determined.
+function coalition_rank(n::Int, fixed_coalitions)
+    rows = Vector{Vector{Float64}}()
+    push!(rows, ones(Float64, n))          # efficiency: sum(x) = C(N)
+    for s in fixed_coalitions
+        row = zeros(Float64, n)
+        for i in s
+            row[i] = 1.0
+        end
+        push!(rows, row)
+    end
+    return rank(reduce(vcat, transpose.(rows)))
+end
+
 function nucleolus_sequential_lp(n::Int, C::Dict{Vector{Int},Float64}; tol::Float64 = 1e-6)
     # The nucleolus is found by lexicographically maximizing the sorted vector of coalition excesses.
     # excess e(s, x) = C(s) - x(s) = how much coalition s saves by joining the grand coalition.
@@ -173,8 +189,9 @@ function nucleolus_sequential_lp(n::Int, C::Dict{Vector{Int},Float64}; tol::Floa
     fixed  = Dict{Vector{Int}, Float64}()  # coalition => locked excess value from a prior iteration
     x_star = zeros(n)
 
-    for iter in 1:n
-        isempty(active) && break
+    iter = 0
+    while !isempty(active) && coalition_rank(n, keys(fixed)) < n
+        iter += 1
 
         model = Model(HiGHS.Optimizer)
         set_silent(model)
@@ -210,8 +227,9 @@ function nucleolus_sequential_lp(n::Int, C::Dict{Vector{Int},Float64}; tol::Floa
             if abs(C[s] - sum(x_vals[i] for i in s) - ε_star) < tol
         )
 
-        @printf("  iter %d | ε* = %8.4f | tight = %d | active remaining = %d\n",
-            iter, ε_star, length(tight), length(active) - length(tight))
+        @printf("  iter %d | ε* = %8.4f | tight = %d | active remaining = %d | rank = %d/%d\n",
+            iter, ε_star, length(tight), length(active) - length(tight),
+            coalition_rank(n, keys(fixed)), n)
 
         isempty(tight) && break
 
