@@ -128,3 +128,15 @@ end
 if abspath(PROGRAM_FILE) == @__FILE__
     run_p4()
 end
+
+################# Written explanation of the solution process ###
+# Using real PV and wind capacity factors from renewables.ninja (Tehachapi, CA, 2019), we find
+# that the realized PV-wind correlation is weakly positive to near-zero (ρ̂ ∈ [-0.24, +0.22])
+# across all 12 months. These monthly (ρ̂, savings) points fall in the "plateau" region of the
+# P3 synthetic curve, where moderate correlation changes have little effect on cooperative savings.
+# Most months sit below the synthetic prediction at the same ρ, because real generation has
+# structural features (diurnal PV zeros, multi-day weather persistence, intermittent wind gusts)
+# that the continuous Beta-copula marginals cannot capture. February and March yield the highest
+# savings (~21-26 $/MW·yr) from strong winter wind complementing moderate PV, while October and
+# November produce near-zero savings when both resources are simultaneously weak.
+############################################################

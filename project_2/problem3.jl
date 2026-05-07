@@ -155,8 +155,10 @@ function run_p3(; ρ_grid = -1.0:0.1:1.0, T::Int = 168, seed::Int = 238,
     )
 end
 
-# to run
-run_p3()
+# to run (guard prevents auto-execution when this file is include'd by another script)
+if abspath(PROGRAM_FILE) == @__FILE__
+    run_p3()
+end
 
 ############################################################
 # written explanation of the solution process

@@ -275,3 +275,18 @@ end
 if abspath(PROGRAM_FILE) == @__FILE__
     run_p5()
 end
+
+################# Written explanation of the solution process ###
+# Adding local demand profiles reveals that cooperative savings depend not only on generation
+# correlation (P3/P4) but also on how well each player's load matches its own generation.
+# The PV+Industrial / Wind+Residential pairing produces 14.0 $/MW·yr savings in July — double
+# the no-demand baseline (6.7) — because industrial load overlaps well with daytime PV (28%
+# self-consumption) while residential evening peaks misalign with wind, creating asymmetric
+# self-consumption that amplifies the value of sharing transmission. Flipping the pairing halves
+# savings to 3.6: when both players self-consume equally well, there is less to gain from
+# cooperation. The demand-scale sweep reveals a non-monotonic relationship: at high demand
+# (α > 0.7), the wind player becomes a net importer during evening peaks, and PV's daytime
+# surplus can serve this deficit via the interconnector — a new complementarity channel distinct
+# from generation-generation complementarity. The nucleolus responds correctly: the wind player's
+# share rises at high α because it benefits disproportionately from the grand coalition.
+############################################################

@@ -65,4 +65,6 @@ function run_p4_sweep(; save::Bool = true)
     return rows
 end
 
-run_p4_sweep()
+if abspath(PROGRAM_FILE) == @__FILE__
+    run_p4_sweep()
+end

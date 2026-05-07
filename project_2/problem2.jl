@@ -100,6 +100,12 @@ function run_p2(n::Int; save::Bool = true)
 end
 
 
+# to run (guard prevents auto-execution when this file is include'd by another script)
+if abspath(PROGRAM_FILE) == @__FILE__
+    run_p2(3)
+    run_p2(10)
+end
+
 ################# Written explanation of the solution process ###
 # In both the n=3 and n=10 cases, the grand coalition cost (122.28 and 184.50 respectively) is well
 # below the sum of standalone costs, because perfect anti-correlation lets all generators share

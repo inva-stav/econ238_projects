@@ -62,8 +62,13 @@ function run_p1(; save::Bool = true)
     return x_star, C
 end
 
+# to run (guard prevents auto-execution when this file is include'd by another script)
+if abspath(PROGRAM_FILE) == @__FILE__
+    run_p1()
+end
+
 ################# Written explanation of the solution process ###
-# Both players win as their excess is each 35, with player 1's cost falling 
-# from 90 to 55 and player 2's cost falling from 100 to 65. In a two 
-# player game, the excess is always equal. The perfect anti-correlation 
-# in generation leads to the grand coalition only needing 0.5 MW of capacity on each line. 
+# Both players win as their excess is each 35, with player 1's cost falling
+# from 90 to 55 and player 2's cost falling from 100 to 65. In a two
+# player game, the excess is always equal. The perfect anti-correlation
+# in generation leads to the grand coalition only needing 0.5 MW of capacity on each line.
