@@ -25,7 +25,7 @@ using Statistics
 using Plots
 
 # -----------------------------------------------------------------------------
-# (a) CVaR function — Rockafellar–Uryasev LP (eq. 19 of theory)
+# (a) CVaR function — Rockafellar–Uryasev LP 
 # -----------------------------------------------------------------------------
 #
 #   CVaR_α(Π) = max  z - (1/(αN)) * Σ_ω δ_ω
@@ -40,10 +40,19 @@ using Plots
 
 function cvar(profit::AbstractVector{<:Real}, alpha::Real)
     # TODO: build JuMP model with HiGHS optimizer
+    model = Model(HiGHS.Optimizer)
     # TODO: declare variables z (free) and δ[1:N] (≥ 0)
+    @variable(model, z)
+    @variable(model, delta[1:length(profit)] >= 0)
     # TODO: add constraints δ[ω] ≥ z - Π[ω]
+    for omega in 1:length(profit)
+        @constraint(model, delta[omega] >= z - profit[omega])
+    end
     # TODO: set objective  max z - (1/(αN)) * sum(δ)
+    @objective(model, Max, z - (1/(alpha * length(profit))) * sum(delta))
     # TODO: optimize! and return objective_value
+    optimize!(model)
+    return objective_value(model)
 end
 
 
