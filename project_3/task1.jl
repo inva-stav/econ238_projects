@@ -43,10 +43,11 @@ function cvar(profit::AbstractVector{<:Real}, alpha::Real)
     model = Model(HiGHS.Optimizer)
     # TODO: declare variables z (free) and δ[1:N] (≥ 0)
     @variable(model, z)
-    @variable(model, delta[1:length(profit)] >= 0)
+    @variable(model, delta[1:length(profit)] >= 0) 
+
     # TODO: add constraints δ[ω] ≥ z - Π[ω]
     for omega in 1:length(profit)
-        @constraint(model, delta[omega] >= z - profit[omega])
+        @constraint(model, delta[omega] >= z - profit[omega]) #epigraph variable delta to capture the positive part of the (z-profit) terms
     end
     # TODO: set objective  max z - (1/(αN)) * sum(δ)
     @objective(model, Max, z - (1/(alpha * length(profit))) * sum(delta))
