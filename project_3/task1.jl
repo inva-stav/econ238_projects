@@ -10,6 +10,7 @@ using Plots
 function cvar(profit::AbstractVector{<:Real}, alpha::Real)
     # TODO: build JuMP model with HiGHS optimizer
     model = Model(HiGHS.Optimizer)
+    set_silent(model)
     # TODO: declare variables z (free) and δ[1:N] (≥ 0)
     @variable(model, z)
     @variable(model, delta[1:length(profit)] >= 0) 
