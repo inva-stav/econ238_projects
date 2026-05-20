@@ -38,15 +38,23 @@ function load_matrix(filename)
     return Matrix{Float64}(df)          # 12 × 2000
 end
 
-const GSF_Wind = load_matrix("wind_gsf.csv")   # 12 × 2000
-const GSF_SH   = load_matrix("sh_gsf.csv")
-const GSF_Bio  = load_matrix("bio_gsf.csv")
-const π_SE     = load_matrix("spot_se.csv")     # 12 × 2000
-const π_NE     = load_matrix("spot_ne.csv")
+const N_SCEN = 2000 # to clip the number of scenarios to keep problem small
+
+const GSF_Wind = load_matrix("wind_gsf.csv")[:, 1:N_SCEN]
+const GSF_SH   = load_matrix("sh_gsf.csv")[:, 1:N_SCEN]
+const GSF_Bio  = load_matrix("bio_gsf.csv")[:, 1:N_SCEN]
+const π_SE     = load_matrix("spot_se.csv")[:, 1:N_SCEN]
+const π_NE     = load_matrix("spot_ne.csv")[:, 1:N_SCEN]
+
+# const GSF_Wind = load_matrix("wind_gsf.csv")   # 12 × 2000
+# const GSF_SH   = load_matrix("sh_gsf.csv")
+# const GSF_Bio  = load_matrix("bio_gsf.csv")
+# const π_SE     = load_matrix("spot_se.csv")     # 12 × 2000
+# const π_NE     = load_matrix("spot_ne.csv")
 
 const T  = 12
 const N  = size(GSF_Wind, 2)     # 2000
-const Ht = Float64[744, 672, 744, 720, 744, 720, 744, 744, 720, 744, 720, 744]
+#const Ht = Float64[744, 672, 744, 720, 744, 720, 744, 744, 720, 744, 720, 744]
 
 const EC_Wind = 11.41
 const EC_SH   = 17.50
@@ -70,9 +78,9 @@ function cvar(profit::AbstractVector{<:Real}, α::Real)
     return objective_value(m)
 end
 
-function rho(profit::AbstractVector{<:Real}, α::Real, λ::Real)
-    return λ * cvar(profit, α) + (1 - λ) * mean(profit)
-end
+# function rho(profit::AbstractVector{<:Real}, α::Real, λ::Real)
+#     return λ * cvar(profit, α) + (1 - λ) * mean(profit)
+# end
 
 # ─────────────────────────────────────────────────────────────────────────────
 # 3. Annual profit vector under TOLLING for a given decision q
@@ -82,19 +90,16 @@ Build the annual profit vector for arbitrary P_sell (prices P_i fixed at 100).
 Under tolling:  Π_{t,ω} = (P_sell - π^NE_{t,ω}) Q_sell
                          + Σ_i [ π^{n(i)}_{t,ω} GSF^i_{t,ω} Q_i  -  P_i Q_i ]
 """
-function annual_profit_vec(Psell, Qsell, QWind, QSH, QBio, Qdr_disp, Qdr_contracted;
-                           PWind=100.0, PSH=100.0, PBio=100.0, Pdr=20.0)
+function monthly_profit_vec(Psell, Qsell, QWind, QSH, QBio, Qdr_contracted, Qdr_disp;
+                           PWind=100.0, PSH=100.0, PBio=100.0, Pdr=0.0)
     Π = zeros(N)
     for ω in 1:N
-        for t in 1:T
-            π_t = (Psell - π_NE[t,ω]) * (Qsell - Qdr_disp[t,ω]) +
-                  (π_NE[t,ω] * GSF_Wind[t,ω] - PWind) * QWind +
-                  (π_SE[t,ω] * GSF_SH[t,ω]   - PSH)   * QSH +
-                  (π_SE[t,ω] * GSF_Bio[t,ω]   - PBio)  * QBio
-            Π[ω] += Ht[t] * π_t
-        end
-        # Subtract the cost of demand reduction incentive
-        Π[ω] -= Qdr_contracted * Pdr * 12
+        Π[ω] = sum(
+                    (Psell - π_NE[t,ω]) * (Qsell - Qdr_disp[t,ω])
+                    + (π_NE[t,ω] * GSF_Wind[t,ω] - PWind) * QWind
+                    + (π_SE[t,ω] * GSF_SH[t,ω]   - PSH)   * QSH
+                    + (π_SE[t,ω] * GSF_Bio[t,ω]   - PBio)  * QBio
+                for t in 1:T) - Qdr_contracted * Pdr
     end
     return Π
 end
@@ -115,7 +120,7 @@ function solve_contracting_lp(Psell::Float64;
                                Qsell_max::Float64=100.0,
                                Qdr_contracted_max::Float64=100.0,
                                active=(wind=true, sh=true, bio=true),
-                               PWind=100.0, PSH=100.0, PBio=100.0, Pdr=20.0)
+                               PWind=100.0, PSH=100.0, PBio=100.0, Pdr=0.0)
 
     m = Model(HiGHS.Optimizer)
     set_silent(m)
@@ -130,104 +135,81 @@ function solve_contracting_lp(Psell::Float64;
     @variable(m, δ[1:N] >= 0)
 
     # ------------------------------------------------------------
-    # Time indexing
+    # Assumptions
     # ------------------------------------------------------------
 
-    # Non-leap year example
-    start_time = DateTime(2025, 1, 1, 0, 0, 0)
+    # T = total number of hourly timesteps
+    # Assume T is divisible by 24
 
-    T = 8760
-    times = [start_time + Hour(t - 1) for t in 1:T]
-
-    # ------------------------------------------------------------
-    # Build day/month index sets
-    # ------------------------------------------------------------
-
-    # Day index for each hour
-    day_of_hour = [Dates.dayofyear(t) for t in times]
-
-    # Month index for each hour
-    month_of_hour = [Dates.month(t) for t in times]
+    num_days = Int(T / 12) # change back to 24 once hourly data for a month is available
 
     # Hours belonging to each day
-    days = unique(day_of_hour)
-
     hours_in_day = Dict(
-        d => findall(day_of_hour .== d)
-        for d in days
+        d => ((12*(d-1) + 1):(12*d)) # change back to 24 once hourly data for a month is available
+        for d in 1:num_days
     )
 
-    # Hours belonging to each month
-    months = 1:12
-
-    hours_in_month = Dict(
-        m => findall(month_of_hour .== m)
-        for m in months
-    )
+    # ------------------------------------------------------------
+    # Decision variables
+    # ------------------------------------------------------------
 
     # y[t, ω] = 1 if DR event active at hour t
-    @variable(m, y[1:T,1:N], Bin)
+    @variable(m, y[1:T, 1:N], Bin)
 
     # s[t, ω] = 1 if DR event starts at hour t
-    @variable(m, s[1:T,1:N], Bin)
+    @variable(m, s[1:T, 1:N], Bin)
 
     # ------------------------------------------------------------
     # Event start logic
     # ------------------------------------------------------------
 
     # First hour
-    @constraint(m, [ω in 1:N], s[1,ω] >= y[1,ω])
+    @constraint(m, [ω in 1:N],
+        s[1,ω] >= y[1,ω]
+    )
 
     # Remaining hours
-    @constraint(m,
-        [t in 2:T, ω in 1:N],
+    @constraint(m, [t in 2:T, ω in 1:N],
         s[t,ω] >= y[t,ω] - y[t-1,ω]
     )
 
     # ------------------------------------------------------------
-    # At most one event per day
+    # 1. At most one event per day
     # ------------------------------------------------------------
 
-    @constraint(m,
-        [d in days, ω in 1:N],
+    @constraint(m, [d in 1:num_days, ω in 1:N],
         sum(s[t,ω] for t in hours_in_day[d]) <= 1
     )
 
     # ------------------------------------------------------------
-    # Maximum 6 event hours per day
+    # 2. Maximum 6 event hours per day
     # ------------------------------------------------------------
 
-    @constraint(m,
-        [d in days, ω in 1:N],
+    @constraint(m, [d in 1:num_days, ω in 1:N],
         sum(y[t,ω] for t in hours_in_day[d]) <= 6
     )
 
     # ------------------------------------------------------------
-    # Maximum 10 events per month
-    # ------------------------------------------------------------
-
-    @constraint(m,
-        [m in months, ω in 1:N],
-        sum(s[t,ω] for t in hours_in_month[m]) <= 10
-    )
-
-    # ------------------------------------------------------------
-    # Maximum 180 event hours per year
+    # 3. At most 10 events over full horizon
     # ------------------------------------------------------------
 
     @constraint(m, [ω in 1:N],
-        sum(y[t,ω] for t in 1:T) <= 180
+        sum(s[t,ω] for t in 1:T) <= 10
     )
 
     # Π_ω as an affine expression of the decision variables
     @expression(m, Π[ω=1:N],
-        sum(Ht[t] * (Psell - π_NE[t,ω]) * (Qsell - Qdr_disp[t,ω]) for t in 1:T)
-        + sum(Ht[t] * (π_NE[t,ω] * GSF_Wind[t,ω] - PWind) for t in 1:T) * QWind 
-        + sum(Ht[t] * (π_SE[t,ω] * GSF_SH[t,ω]   - PSH) for t in 1:T) * QSH 
-        + sum(Ht[t] * (π_SE[t,ω] * GSF_Bio[t,ω]   - PBio) for t in 1:T) * QBio
-        - Qdr_contracted * Pdr * 12) # Pdr is monthly incentive for DR, multiplied by Potential Load Reduction (PLR) = AverageDemand - FirmServiceLoad (FSL) = Qdr_contracted
+        sum(
+            (Psell - π_NE[t,ω]) * (Qsell - Qdr_disp[t,ω])
+            + (π_NE[t,ω] * GSF_Wind[t,ω] - PWind) * QWind 
+            + (π_SE[t,ω] * GSF_SH[t,ω]   - PSH) * QSH 
+            + (π_SE[t,ω] * GSF_Bio[t,ω]   - PBio) * QBio
+        for t in 1:T) - Qdr_contracted * Pdr # Pdr is monthly incentive for DR, multiplied by Potential Load Reduction (PLR) = AverageDemand - FirmServiceLoad (FSL) = Qdr_contracted
+    )
 
-    @constraint(m, [t in 1:T, ω in 1:N], Qdr_disp[t,ω] <= Qdr_contracted * y[t,ω])
+    @constraint(m, [t in 1:T, ω in 1:N], Qdr_disp[t,ω] <= Qdr_contracted)
+    @constraint(m, [t in 1:T, ω in 1:N], Qdr_disp[t,ω] <= Qdr_contracted_max * y[t,ω])
+    # Previously (but potentially disliked by some solvers for variable RHS): @constraint(m, [t in 1:T, ω in 1:N], Qdr_disp[t,ω] <= Qdr_contracted * y[t,ω]). The current version is standard BigM formulation.
 
     @constraint(m, [ω=1:N], δ[ω] >= z - Π[ω])
 
@@ -244,14 +226,18 @@ function solve_contracting_lp(Psell::Float64;
     qdr_contracted = value(Qdr_contracted)
     qdr_dispatched = [value(Qdr_disp[t,ω]) for t in 1:T, ω in 1:N]
 
-    profit_vec = annual_profit_vec(Psell, qs, qw, qsh, qb, qdr_contracted, qdr_dispatched;
-                                   PWind=PWind, PSH=PSH, PBio=PBio)
+    profit_vec = monthly_profit_vec(Psell, qs, qw, qsh, qb, qdr_contracted, qdr_dispatched;
+                                   PWind=PWind, PSH=PSH, PBio=PBio, Pdr=Pdr)
     EΠ   = mean(profit_vec)
     CVaR = cvar(profit_vec, α)
     ρval = λ * CVaR + (1 - λ) * EΠ
 
-    return (Qsell=qs, QWind=qw, QSH=qsh, QBio=qb, Qdr=qdr, EΠ=EΠ, CVaR=CVaR, ρ=ρval)
+    return (Qsell=qs, QWind=qw, QSH=qsh, QBio=qb, Qdr_contracted=qdr_contracted, Qdr_dispatched=qdr_dispatched, EΠ=EΠ, CVaR=CVaR, ρ=ρval)
 end
+
+# Example run of the contracting LP function with default parameters
+result = solve_contracting_lp(140.0)
+println("Optimization result:", result)
 
 # println("Total event hours = ", value.(y) |> sum)
 # println("Total events = ", value.(s) |> sum)
