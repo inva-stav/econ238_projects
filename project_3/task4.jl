@@ -60,8 +60,6 @@ const EC_Wind = 11.41
 const EC_SH   = 17.50
 const EC_Bio  = 17.59
 
-println("Data loaded: T=$T, N=$N, total hours=$(sum(Ht))")
-
 # ─────────────────────────────────────────────────────────────────────────────
 # 2. CVaR function (reused from Task 1)
 # ─────────────────────────────────────────────────────────────────────────────
@@ -140,12 +138,13 @@ function solve_contracting_lp(Psell::Float64;
 
     # T = total number of hourly timesteps
     # Assume T is divisible by 24
+    hours_per_day = 12 # change back to 24 once hourly data for a month is available
 
-    num_days = Int(T / 12) # change back to 24 once hourly data for a month is available
+    num_days = Int(T / hours_per_day) 
 
     # Hours belonging to each day
     hours_in_day = Dict(
-        d => ((12*(d-1) + 1):(12*d)) # change back to 24 once hourly data for a month is available
+        d => ((hours_per_day*(d-1) + 1):(hours_per_day*d))
         for d in 1:num_days
     )
 
@@ -235,9 +234,36 @@ function solve_contracting_lp(Psell::Float64;
     return (Qsell=qs, QWind=qw, QSH=qsh, QBio=qb, Qdr_contracted=qdr_contracted, Qdr_dispatched=qdr_dispatched, EΠ=EΠ, CVaR=CVaR, ρ=ρval)
 end
 
-# Example run of the contracting LP function with default parameters
-result = solve_contracting_lp(140.0)
+
+#################################################################################
+##### RUNNING THE SCRIPT ########################################################
+#################################################################################
+
+# Define inputs for the solve_contracting_lp function
+Psell = 140.0
+λ = 0.5
+α = 0.05
+Qsell_max = 100.0
+Qdr_contracted_max = 100.0
+active = (wind=true, sh=true, bio=true)
+PWind = 100.0
+PSH = 100.0
+PBio = 100.0
+Pdr = 0.0
+
+# Run the function with the defined inputs
+result = solve_contracting_lp(Psell; λ=λ, α=α, Qsell_max=Qsell_max, Qdr_contracted_max=Qdr_contracted_max, active=active, PWind=PWind, PSH=PSH, PBio=PBio, Pdr=Pdr)
 println("Optimization result:", result)
+
+
+
+
+
+
+#################################################################################
+##### PLOTTING AND ANALYSIS #####################################################
+#################################################################################
+
 
 # println("Total event hours = ", value.(y) |> sum)
 # println("Total events = ", value.(s) |> sum)
