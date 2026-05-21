@@ -72,8 +72,8 @@ const HOURS_PER_DAY = 24
 const NUM_DAYS      = T ÷ HOURS_PER_DAY  # 30
 const HOURS_IN_DAY  = Dict(d => ((HOURS_PER_DAY*(d-1)+1):(HOURS_PER_DAY*d)) for d in 1:NUM_DAYS)
 
-const EC_Wind  = 2.0
-const EC_Solar = 2.0
+const EC_Wind  = 10.0
+const EC_Solar = 10.0
 
 println("Loaded $(N) scenarios, $(T) hours each.")
 println("Scenario range: $(SCENARIO_LABELS[1]) → $(SCENARIO_LABELS[end])")
@@ -147,7 +147,8 @@ function solve_contracting_lp(Psell::Float64;
     @variable(m, y[1:T, 1:n], Bin)
     @variable(m, s[1:T, 1:n], Bin)
 
-    @constraint(m, [i in 1:n], s[1,i] >= y[1,i])
+    day_starts = [(d-1)*HOURS_PER_DAY + 1 for d in 1:NUM_DAYS]
+    @constraint(m, [t in day_starts, i in 1:n], s[t,i] >= y[t,i])
     @constraint(m, [t in 2:T, i in 1:n], s[t,i] >= y[t,i] - y[t-1,i])
     @constraint(m, [d in 1:NUM_DAYS, i in 1:n], sum(s[t,i] for t in HOURS_IN_DAY[d]) <= 1)
     @constraint(m, [d in 1:NUM_DAYS, i in 1:n], sum(y[t,i] for t in HOURS_IN_DAY[d]) <= 6)
@@ -173,7 +174,7 @@ function solve_contracting_lp(Psell::Float64;
     qw    = value(QWind)
     qsol  = value(QSolar)
     qdr_c = value(Qdr_contracted)
-    qdr_d = [value(Qdr_disp[t,i]) for t in 1:T, i in 1:n]
+    qdr_d  = [value(Qdr_disp[t,i]) for t in 1:T, i in 1:n]
     y_vals = [round(Int, value(y[t,i])) for t in 1:T, i in 1:n]
     s_vals = [round(Int, value(s[t,i])) for t in 1:T, i in 1:n]
 
@@ -194,45 +195,321 @@ end
 # ─────────────────────────────────────────────────────────────────────────────
 
 function run_psell_sweep(; Psell_grid=20.0:10.0:120.0, λ=0.5, α=0.05,
-                           Qsell_max=10.0, Qdr_contracted_max=5.0)
+                           Qsell_max=10.0, Qdr_contracted_max=5.0,
+                           PWind=0.0, PSolar=0.0, Pdr=0.0)
     configs = [
-        ("Wind+Solar", (wind=true,  solar=true)),
-        ("Wind only",  (wind=true,  solar=false)),
-        ("Solar only", (wind=false, solar=true)),
+        ("Wind+Solar",    (wind=true, solar=true), 0.0),
+        ("Wind+Solar+DR", (wind=true, solar=true), Qdr_contracted_max),
     ]
-    results = Dict(name => NamedTuple[] for (name, _) in configs)
+    results = Dict(name => NamedTuple[] for (name, _, _) in configs)
     total   = length(Psell_grid) * length(configs)
     count   = 0
-    for (name, act) in configs
+    for (name, act, qdr_max) in configs
         for Ps in Psell_grid
             r = solve_contracting_lp(Float64(Ps); λ=λ, α=α,
                                       Qsell_max=Qsell_max,
-                                      Qdr_contracted_max=Qdr_contracted_max,
+                                      Qdr_contracted_max=qdr_max,
+                                      PWind=PWind, PSolar=PSolar, Pdr=Pdr,
                                       active=act)
             push!(results[name], r)
             count += 1
             println("  Psell sweep $count/$total  ($(name), Ps=\$$(Int(Ps)))")
         end
     end
-    return collect(Psell_grid), results
+    Ps_vals = collect(Psell_grid)
+    # Save to CSV
+    rows = [(config=name, Psell=Ps, Qsell=r.Qsell, QWind=r.QWind, QSolar=r.QSolar,
+             Qdr_contracted=r.Qdr_contracted, EΠ=r.EΠ, CVaR=r.CVaR, ρ=r.ρ)
+            for (name, rs) in results for (Ps, r) in zip(Ps_vals, rs)]
+    CSV.write(joinpath(RESULTS_DIR, "sweep_bilateral_price.csv"), DataFrame(rows))
+    println("  Saved sweep_bilateral_price.csv")
+    return Ps_vals, results
+end
+
+function load_psell_sweep()
+    path = joinpath(RESULTS_DIR, "sweep_bilateral_price.csv")
+    df = CSV.read(path, DataFrame)
+    Ps_vals = sort(unique(df[!, :Psell]))
+    results = Dict{String, Vector{NamedTuple}}()
+    for name in unique(df[!, :config])
+        sub = sort(df[df[!, :config] .== name, :], :Psell)
+        results[name] = [(Qsell=row.Qsell, QWind=row.QWind, QSolar=row.QSolar,
+                          Qdr_contracted=row.Qdr_contracted,
+                          EΠ=row.EΠ, CVaR=row.CVaR, ρ=row.ρ)
+                         for row in eachrow(sub)]
+    end
+    return Ps_vals, results
 end
 
 function run_lambda_sweep(Psell; λ_grid=0.1:0.1:1.0, α=0.05,
-                           Qsell_max=10.0, Qdr_contracted_max=5.0)
+                           Qsell_max=10.0, Qdr_contracted_max=5.0,
+                           PWind=0.0, PSolar=0.0, Pdr=0.0)
     rr_results = NamedTuple[]
     for (k, λv) in enumerate(λ_grid)
         r = solve_contracting_lp(Float64(Psell); λ=Float64(λv), α=α,
                                   Qsell_max=Qsell_max,
-                                  Qdr_contracted_max=Qdr_contracted_max)
+                                  Qdr_contracted_max=Qdr_contracted_max,
+                                  PWind=PWind, PSolar=PSolar, Pdr=Pdr)
         push!(rr_results, r)
         println("  λ sweep $(k)/$(length(λ_grid))  (λ=$(λv))")
     end
-    return collect(λ_grid), rr_results
+    λ_vals = collect(λ_grid)
+    # Save to CSV
+    rows = [(λ=λv, Qsell=r.Qsell, QWind=r.QWind, QSolar=r.QSolar,
+             Qdr_contracted=r.Qdr_contracted, EΠ=r.EΠ, CVaR=r.CVaR, ρ=r.ρ)
+            for (λv, r) in zip(λ_vals, rr_results)]
+    CSV.write(joinpath(RESULTS_DIR, "sweep_risk_weight.csv"), DataFrame(rows))
+    println("  Saved sweep_risk_weight.csv")
+    return λ_vals, rr_results
+end
+
+function load_lambda_sweep()
+    df = CSV.read(joinpath(RESULTS_DIR, "sweep_risk_weight.csv"), DataFrame)
+    sort!(df, :λ)
+    rr_results = [(Qsell=row.Qsell, QWind=row.QWind, QSolar=row.QSolar,
+                   Qdr_contracted=row.Qdr_contracted,
+                   EΠ=row.EΠ, CVaR=row.CVaR, ρ=row.ρ)
+                  for row in eachrow(df)]
+    return df[!, :λ], rr_results
+end
+
+function run_qdr_sweep(Psell; qdr_grid=0.0:0.5:5.0, λ=0.5, α=0.05, Qsell_max=10.0,
+                       PWind=0.0, PSolar=0.0, Pdr=0.0)
+    results = NamedTuple[]
+    total = length(qdr_grid)
+    for (k, qdr_max) in enumerate(qdr_grid)
+        r = solve_contracting_lp(Float64(Psell); λ=λ, α=α,
+                                  Qsell_max=Qsell_max,
+                                  Qdr_contracted_max=Float64(qdr_max),
+                                  PWind=PWind, PSolar=PSolar, Pdr=Pdr)
+        push!(results, r)
+        println("  Qdr sweep $(k)/$(total)  (Qdr_max=$(qdr_max) MW)")
+    end
+    qdr_vals = collect(qdr_grid)
+    rows = [(Qdr_max=q, Qsell=r.Qsell, QWind=r.QWind, QSolar=r.QSolar,
+             Qdr_contracted=r.Qdr_contracted, EΠ=r.EΠ, CVaR=r.CVaR, ρ=r.ρ)
+            for (q, r) in zip(qdr_vals, results)]
+    CSV.write(joinpath(RESULTS_DIR, "sweep_qdr_capacity.csv"), DataFrame(rows))
+    println("  Saved sweep_qdr_capacity.csv")
+    return qdr_vals, results
+end
+
+function load_qdr_sweep()
+    df = CSV.read(joinpath(RESULTS_DIR, "sweep_qdr_capacity.csv"), DataFrame)
+    sort!(df, :Qdr_max)
+    results = [(Qsell=row.Qsell, QWind=row.QWind, QSolar=row.QSolar,
+                Qdr_contracted=row.Qdr_contracted,
+                EΠ=row.EΠ, CVaR=row.CVaR, ρ=row.ρ)
+               for row in eachrow(df)]
+    return df[!, :Qdr_max], results
+end
+
+function run_tail_scenario_analysis(Psell; α=0.05, λ=0.5, Qsell_max=10.0,
+                                     PWind=0.0, PSolar=0.0, Pdr=0.0)
+    # Solve with Qdr=0 to get per-scenario profit vector
+    println("  Solving with Qdr_max=0 MW...")
+    r0 = solve_contracting_lp(Float64(Psell); λ=λ, α=α,
+                               Qsell_max=Qsell_max, Qdr_contracted_max=0.0,
+                               PWind=PWind, PSolar=PSolar, Pdr=Pdr)
+
+    # Load Qdr=5 profits from baseline cache
+    pv5 = CSV.read(joinpath(RESULTS_DIR, "baseline_scenario_profits.csv"), DataFrame)[!, :profit]
+
+    profit0 = r0.profit_vec
+    profit5 = Vector{Float64}(pv5)
+
+    n_tail = max(1, floor(Int, α * N))
+    tail0  = sort(sortperm(profit0)[1:n_tail])
+    tail5  = sort(sortperm(profit5)[1:n_tail])
+
+    sc_labels = [string(yr)*"-"*lpad(mo,2,'0') for (yr,mo) in SCENARIO_LABELS]
+    df = DataFrame(
+        scenario     = sc_labels,
+        profit_qdr0  = profit0,
+        profit_qdr5  = profit5,
+        in_tail_qdr0 = [i in tail0 for i in 1:N],
+        in_tail_qdr5 = [i in tail5 for i in 1:N],
+    )
+    CSV.write(joinpath(RESULTS_DIR, "tail_scenario_analysis.csv"), df)
+    println("  Saved tail_scenario_analysis.csv")
+    return (profit0=profit0, profit5=profit5, tail0=tail0, tail5=tail5, sc_labels=sc_labels)
+end
+
+function load_tail_scenario_analysis()
+    df = CSV.read(joinpath(RESULTS_DIR, "tail_scenario_analysis.csv"), DataFrame;
+                  types=Dict(:scenario => String))
+    tail0 = findall(df[!, :in_tail_qdr0])
+    tail5 = findall(df[!, :in_tail_qdr5])
+    return (profit0=df[!, :profit_qdr0], profit5=df[!, :profit_qdr5],
+            tail0=tail0, tail5=tail5, sc_labels=df[!, :scenario])
+end
+
+function plot_tail_scenarios(td)
+    cap = 250.0
+    px  = clamp.(π_ERCOT, -Inf, cap)
+    hrs = 1:T
+
+    lbl0 = "tail Qdr=0 MW  (" * join(td.sc_labels[td.tail0], ", ") * ")"
+    lbl5 = "tail Qdr=5 MW  (" * join(td.sc_labels[td.tail5], ", ") * ")"
+
+    plt = plot(xlabel="Hour within month",
+               ylabel="Spot price (\$/MWh, capped \$250)",
+               title="Price scenario paths — CVaR₀.₀₅ tails for Qdr ∈ {0, 5} MW  (Psell=\$70, λ=0.5)",
+               legend=:topright, size=(1100,520),
+               left_margin=8Plots.mm, bottom_margin=5Plots.mm)
+
+    for ω in 1:N
+        plot!(plt, hrs, px[:, ω]; color=:gray, alpha=0.15, linewidth=0.5, label="")
+    end
+    for (k, ω) in enumerate(td.tail0)
+        plot!(plt, hrs, px[:, ω]; color=:red,      alpha=0.9, linewidth=1.8, label=(k==1 ? lbl0 : ""))
+    end
+    for (k, ω) in enumerate(td.tail5)
+        plot!(plt, hrs, px[:, ω]; color=:royalblue, alpha=0.9, linewidth=1.8, label=(k==1 ? lbl5 : ""))
+    end
+
+    savefig(plt, joinpath(RESULTS_DIR, "tail_price_scenarios.png"))
+    println("Saved tail_price_scenarios.png")
+    return plt
+end
+
+function plot_ranked_profits(td)
+    # Sort scenarios by Qdr=0 profit (worst → best)
+    order     = sortperm(td.profit0)
+    p0_sorted = td.profit0[order]
+    p5_sorted = td.profit5[order]
+    labels_sorted = td.sc_labels[order]
+    ranks = 1:N
+
+    n_tail = length(td.tail0)
+    tail_ranks = 1:n_tail   # tail is always the leftmost n_tail after sorting
+
+    plt = plot(xlabel="Scenario rank (1 = worst profit without DR)",
+               ylabel="Scenario profit (\$)",
+               title="Ranked scenario profits — Qdr=0 vs Qdr=5 MW  (Psell=\$70, λ=0.5)",
+               legend=:topleft, size=(950, 520),
+               left_margin=8Plots.mm, bottom_margin=5Plots.mm)
+
+    # All scenarios: lines
+    plot!(plt, ranks, p0_sorted; color=:red,      linewidth=1.5, label="Profit — Qdr=0 MW", alpha=0.7)
+    plot!(plt, ranks, p5_sorted; color=:steelblue, linewidth=1.5, label="Profit — Qdr=5 MW", alpha=0.7)
+
+    # Tail markers
+    scatter!(plt, tail_ranks, p0_sorted[tail_ranks]; color=:red,      markersize=7, markerstrokewidth=0, label="")
+    scatter!(plt, tail_ranks, p5_sorted[tail_ranks]; color=:steelblue, markersize=7, markerstrokewidth=0, label="")
+
+    # Vertical line at tail cutoff
+    vline!(plt, [n_tail + 0.5]; color=:black, linestyle=:dash, linewidth=1.2,
+           label=@sprintf("CVaR₀.₀₅ cutoff (rank ≤ %d)", n_tail))
+
+    # Annotate tail scenario labels
+    for r in tail_ranks
+        annotate!(plt, r + 0.3, p0_sorted[r],
+                  text(labels_sorted[r], 7, :left, :red))
+    end
+
+    # Shaded region between Qdr=0 and Qdr=5 in the tail
+    plot!(plt, tail_ranks, p0_sorted[tail_ranks];
+          fillrange=p5_sorted[tail_ranks], fillalpha=0.15, color=:steelblue,
+          linewidth=0, label="DR benefit in tail")
+
+    hline!(plt, [0.0]; color=:gray, linestyle=:dot, linewidth=1, label="")
+
+    savefig(plt, joinpath(RESULTS_DIR, "ranked_scenario_profits.png"))
+    println("Saved ranked_scenario_profits.png")
+    return plt
+end
+
+function plot_profit_vs_qdr(qdr_vals, qdr_results)
+    EΠ_vals   = [r.EΠ   for r in qdr_results]
+    CVaR_vals = [r.CVaR for r in qdr_results]
+    ρ_vals    = [r.ρ    for r in qdr_results]
+
+    plt = plot(xlabel="DR contracted capacity (MW)",
+               ylabel="Value (\$)",
+               title="Profit vs DR contracted capacity  (Psell=\$70, λ=0.5, Wind+Solar)",
+               legend=:bottomright, size=(800,500),
+               left_margin=8Plots.mm, bottom_margin=5Plots.mm)
+    plot!(plt, qdr_vals, EΠ_vals;   label="E[Π]",                      color=:steelblue, linewidth=2)
+    plot!(plt, qdr_vals, CVaR_vals; label="CVaR₀.₀₅",                  color=:red,       linewidth=2)
+    plot!(plt, qdr_vals, ρ_vals;    label="ρ = λ·CVaR + (1−λ)·E[Π]",  color=:purple,    linewidth=2, linestyle=:dash)
+
+    savefig(plt, joinpath(RESULTS_DIR, "profit_vs_qdr.png"))
+    println("Saved profit_vs_qdr.png")
+    return plt
+end
+
+# Save/load the full optimization result (scalars + dispatch matrices)
+function save_result_full(r; Psell=70.0)
+    sc_labels = [string(yr)*"-"*lpad(mo,2,'0') for (yr,mo) in SCENARIO_LABELS]
+    # Scalars: optimal contract decisions for the baseline run
+    CSV.write(joinpath(RESULTS_DIR, "baseline_optimal_contract.csv"),
+              DataFrame(Psell=Psell, Qsell=r.Qsell, QWind=r.QWind, QSolar=r.QSolar,
+                        Qdr_contracted=r.Qdr_contracted,
+                        EΠ=r.EΠ, CVaR=r.CVaR, ρ=r.ρ))
+    # Per-scenario profits under the optimal contract
+    CSV.write(joinpath(RESULTS_DIR, "baseline_scenario_profits.csv"),
+              DataFrame(scenario=sc_labels, profit=r.profit_vec))
+    # Binary matrix: y[t,ω]=1 means DR is active in hour t, scenario ω
+    y_df = DataFrame(r.y_vals, sc_labels)
+    insertcols!(y_df, 1, :t => 1:T)
+    CSV.write(joinpath(RESULTS_DIR, "baseline_dr_active.csv"), y_df)
+    # Binary matrix: s[t,ω]=1 means a new DR event starts in hour t, scenario ω
+    s_df = DataFrame(r.s_vals, sc_labels)
+    insertcols!(s_df, 1, :t => 1:T)
+    CSV.write(joinpath(RESULTS_DIR, "baseline_dr_starts.csv"), s_df)
+    println("  Saved baseline_optimal_contract.csv, baseline_scenario_profits.csv, baseline_dr_active.csv, baseline_dr_starts.csv")
+end
+
+function load_result_full()
+    sc   = CSV.read(joinpath(RESULTS_DIR, "baseline_optimal_contract.csv"),  DataFrame)
+    pv   = CSV.read(joinpath(RESULTS_DIR, "baseline_scenario_profits.csv"),  DataFrame)
+    y_df = CSV.read(joinpath(RESULTS_DIR, "baseline_dr_active.csv"),         DataFrame)
+    s_df = CSV.read(joinpath(RESULTS_DIR, "baseline_dr_starts.csv"),         DataFrame)
+    y_vals = Matrix{Int}(y_df[:, 2:end])
+    s_vals = Matrix{Int}(s_df[:, 2:end])
+    return (Qsell=sc[1,:Qsell], QWind=sc[1,:QWind], QSolar=sc[1,:QSolar],
+            Qdr_contracted=sc[1,:Qdr_contracted],
+            EΠ=sc[1,:EΠ], CVaR=sc[1,:CVaR], ρ=sc[1,:ρ],
+            y_vals=y_vals, s_vals=s_vals, profit_vec=pv[!,:profit])
 end
 
 # ─────────────────────────────────────────────────────────────────────────────
 # 6. Plot functions
 # ─────────────────────────────────────────────────────────────────────────────
+
+# ── Plot 0: Spot price histogram ─────────────────────────────────────────────
+
+function plot_price_histogram(; cap=300.0)
+    prices = vec(π_ERCOT)
+    n_total  = length(prices)
+    n_capped = sum(prices .> cap)
+    prices_shown = clamp.(prices, -Inf, cap)
+
+    pct_above = 100*n_capped/n_total
+    plt = histogram(prices_shown; bins=80, normalize=:pdf,
+                    xlabel="Spot price (USD/MWh)",
+                    ylabel="Density",
+                    title=@sprintf("ERCOT RTM spot prices — Jun–Sep 2015–2024  (N=%d hours, %.1f%% above %.0f USD cap)",
+                                   n_total, pct_above, cap),
+                    label="", color=:steelblue, alpha=0.7,
+                    size=(800, 450),
+                    left_margin=8Plots.mm, bottom_margin=8Plots.mm)
+    vline!(plt, [mean(prices)];
+           color=:black, linestyle=:dash, linewidth=2,
+           label=@sprintf("Mean  %.0f USD/MWh", mean(prices)))
+    vline!(plt, [median(prices)];
+           color=:gray, linestyle=:dot, linewidth=2,
+           label=@sprintf("Median %.0f USD/MWh", median(prices)))
+    vline!(plt, [Psell];
+           color=:red, linestyle=:dash, linewidth=2,
+           label=@sprintf("Psell = %.0f USD/MWh", Psell))
+    savefig(plt, joinpath(RESULTS_DIR, "price_histogram.png"))
+    println("Saved price_histogram.png")
+    println(@sprintf("  Mean=\$%.1f  Median=\$%.1f  Std=\$%.1f  Min=\$%.1f  Max=\$%.1f",
+                     mean(prices), median(prices), std(prices), minimum(prices), maximum(prices)))
+    return plt
+end
 
 # ── Plot 4: Seasonality ───────────────────────────────────────────────────────
 
@@ -286,25 +563,28 @@ end
 # ── Plot 1: Willingness-to-supply ─────────────────────────────────────────────
 
 function plot_willingness_to_supply(Ps_vals, sweep_results)
-    colors = Dict("Wind+Solar"=>:red, "Wind only"=>:blue, "Solar only"=>:darkorange)
+    rs_ws  = sweep_results["Wind+Solar"]
+    rs_dr  = sweep_results["Wind+Solar+DR"]
     mean_price = mean(vec(π_ERCOT))
 
     plt = plot(xlabel="P_sell (\$/MWh)", ylabel="Quantity (MW)",
-               title="Willingness-to-supply  (λ=0.5, α=0.05, N=40 scenarios)",
-               legend=:outertopright, size=(950,500),
+               title="Optimal quantities vs bilateral contract price  (λ=0.5, N=40 scenarios)",
+               legend=:topleft, size=(900,500),
                left_margin=8Plots.mm, bottom_margin=5Plots.mm)
 
-    for name in ["Wind+Solar", "Wind only", "Solar only"]
-        Qsell_vals = [r.Qsell         for r in sweep_results[name]]
-        QEC_vals   = [r.QWind+r.QSolar for r in sweep_results[name]]
-        plot!(plt, Ps_vals, Qsell_vals; label="Qsell — $name",
-              color=colors[name], linewidth=2)
-        plot!(plt, Ps_vals, QEC_vals;   label="QWind+QSolar — $name",
-              color=colors[name], linewidth=2, linestyle=:dash)
-    end
+    # Wind+Solar (no DR): Qsell, QWind, QSolar
+    plot!(plt, Ps_vals, [r.Qsell  for r in rs_ws]; label="Qsell — W+S",      color=:steelblue,  linewidth=2)
+    plot!(plt, Ps_vals, [r.QWind  for r in rs_ws]; label="QWind — W+S",      color=:steelblue,  linewidth=1.5, linestyle=:dash)
+    plot!(plt, Ps_vals, [r.QSolar for r in rs_ws]; label="QSolar — W+S",     color=:steelblue,  linewidth=1.5, linestyle=:dot)
+
+    # Wind+Solar+DR: Qsell, QWind, QSolar, Qdr_contracted
+    plot!(plt, Ps_vals, [r.Qsell          for r in rs_dr]; label="Qsell — W+S+DR",         color=:red,    linewidth=2)
+    plot!(plt, Ps_vals, [r.QWind          for r in rs_dr]; label="QWind — W+S+DR",         color=:red,    linewidth=1.5, linestyle=:dash)
+    plot!(plt, Ps_vals, [r.QSolar         for r in rs_dr]; label="QSolar — W+S+DR",        color=:red,    linewidth=1.5, linestyle=:dot)
+    plot!(plt, Ps_vals, [r.Qdr_contracted for r in rs_dr]; label="Qdr_contracted — W+S+DR",color=:purple, linewidth=2,   linestyle=:dash)
 
     vline!(plt, [mean_price];
-           label=@sprintf("Mean price \$%.0f/MWh", mean_price),
+           label=@sprintf("Mean spot \$%.0f/MWh", mean_price),
            color=:black, linestyle=:dot, linewidth=1.5)
 
     savefig(plt, joinpath(RESULTS_DIR, "willingness_to_supply.png"))
@@ -315,30 +595,26 @@ end
 # ── Plot 3: Certainty equivalent & diversification benefit ────────────────────
 
 function plot_certainty_equivalent(Ps_vals, sweep_results)
-    ρ_joint = [r.ρ for r in sweep_results["Wind+Solar"]]
-    ρ_wind  = [r.ρ for r in sweep_results["Wind only"]]
-    ρ_solar = [r.ρ for r in sweep_results["Solar only"]]
-    ρ_sum   = ρ_wind .+ ρ_solar
-    div_ben = ρ_joint .- ρ_sum
+    ρ_dr = [r.ρ for r in sweep_results["Wind+Solar+DR"]]
+    ρ_ws = [r.ρ for r in sweep_results["Wind+Solar"]]
+    dr_benefit = ρ_dr .- ρ_ws
 
     plt_ce = plot(xlabel="P_sell (\$/MWh)", ylabel="Certainty equivalent ρ (\$)",
                   title="Certainty equivalent  (λ=0.5)",
-                  legend=:outertopright, size=(800,450),
+                  legend=:topleft, size=(800,450),
                   left_margin=8Plots.mm, bottom_margin=5Plots.mm)
-    plot!(plt_ce, Ps_vals, ρ_joint; label="ρ  Wind+Solar", color=:red,       linewidth=2)
-    plot!(plt_ce, Ps_vals, ρ_sum;   label="ρ_Wind + ρ_Solar", color=:blue,   linewidth=2)
-    plot!(plt_ce, Ps_vals, ρ_wind;  label="ρ  Wind only",  color=:steelblue, linewidth=1.5, linestyle=:dash)
-    plot!(plt_ce, Ps_vals, ρ_solar; label="ρ  Solar only", color=:darkorange,linewidth=1.5, linestyle=:dash)
+    plot!(plt_ce, Ps_vals, ρ_dr; label="ρ  Wind+Solar+DR", color=:red,      linewidth=2)
+    plot!(plt_ce, Ps_vals, ρ_ws; label="ρ  Wind+Solar",    color=:steelblue, linewidth=2)
 
-    plt_div = plot(Ps_vals, div_ben;
-                   xlabel="P_sell (\$/MWh)", ylabel="Diversification benefit (\$)",
-                   title="ρ_joint − (ρ_Wind + ρ_Solar)",
-                   label="Benefit", color=:purple, linewidth=2,
-                   fill=0, fillalpha=0.2, legend=:topleft,
-                   left_margin=8Plots.mm, bottom_margin=5Plots.mm)
-    hline!(plt_div, [0.0]; color=:black, linestyle=:dot, label="")
+    plt_dr = plot(Ps_vals, dr_benefit;
+                  xlabel="P_sell (\$/MWh)", ylabel="DR benefit  Δρ (\$)",
+                  title="ρ(W+S+DR) − ρ(W+S)",
+                  label="DR benefit", color=:purple, linewidth=2,
+                  fill=0, fillalpha=0.2, legend=:topleft,
+                  left_margin=8Plots.mm, bottom_margin=5Plots.mm)
+    hline!(plt_dr, [0.0]; color=:black, linestyle=:dot, label="")
 
-    plt = plot(plt_ce, plt_div; layout=(1,2), size=(1400,450),
+    plt = plot(plt_ce, plt_dr; layout=(1,2), size=(1400,450),
                left_margin=8Plots.mm, bottom_margin=5Plots.mm)
     savefig(plt, joinpath(RESULTS_DIR, "certainty_equivalent.png"))
     println("Saved certainty_equivalent.png")
@@ -385,8 +661,6 @@ function plot_dr_dispatch(result_full)
         t_slots = h:HOURS_PER_DAY:T
         hourly_rate[h] = mean(y[t_slots, :])
     end
-    hod_labels = [string(h-1) for h in 1:HOURS_PER_DAY]  # 0–23 UTC
-
     plt1 = bar(0:23, hourly_rate;
                xlabel="Hour of day (UTC;  ERCOT local = UTC−6)",
                ylabel="Fraction of scenario-days with DR active",
@@ -439,20 +713,25 @@ end
 ##### RUNNING THE SCRIPT ########################################################
 #################################################################################
 
-Psell              = 70.0
+Psell              = 55.0
 λ                  = 0.5
 α                  = 0.05
 Qsell_max          = 10.0
-Qdr_contracted_max = 5.0
-PWind              = 0.0
-PSolar             = 0.0
-Pdr                = 0.0
+Qdr_contracted_max = 2.0
+PWind              = 16.0
+PSolar             = 13.0
+Pdr                = 100.0
+
+# ── Spot price histogram (fast — no optimization) ────────────────────────────
+println("\nGenerating spot price histogram...")
+plot_price_histogram()
 
 # ── Single-scenario smoke test ───────────────────────────────────────────────
 println("\nRunning single-scenario test (scenario 1: $(SCENARIO_LABELS[1]))...")
 t0 = time()
 result_test = solve_contracting_lp(Psell; λ=λ, α=α,
     Qsell_max=Qsell_max, Qdr_contracted_max=Qdr_contracted_max,
+    PWind=PWind, PSolar=PSolar, Pdr=Pdr,
     scenario_indices=1:1)
 elapsed = time() - t0
 println("Done in $(round(elapsed; digits=1))s")
@@ -461,48 +740,77 @@ println("Done in $(round(elapsed; digits=1))s")
 @printf("  E[Π]=\$%.2f  CVaR=\$%.2f  ρ=\$%.2f\n",
         result_test.EΠ, result_test.CVaR, result_test.ρ)
 
-# ── Full 40-scenario run ─────────────────────────────────────────────────────
-println("\nRunning full 40-scenario optimization...")
-t1 = time()
-result_full = solve_contracting_lp(Psell; λ=λ, α=α,
-    Qsell_max=Qsell_max, Qdr_contracted_max=Qdr_contracted_max)
-println("Done in $(round(time()-t1; digits=1))s")
+# ── Full 40-scenario run (cache-or-compute) ───────────────────────────────────
+if isfile(joinpath(RESULTS_DIR, "baseline_optimal_contract.csv"))
+    println("\nLoading full result from cache...")
+    result_full = load_result_full()
+else
+    println("\nRunning full 40-scenario optimization...")
+    t1 = time()
+    result_full = solve_contracting_lp(Psell; λ=λ, α=α,
+        Qsell_max=Qsell_max, Qdr_contracted_max=Qdr_contracted_max,
+        PWind=PWind, PSolar=PSolar, Pdr=Pdr)
+    println("Done in $(round(time()-t1; digits=1))s")
+    save_result_full(result_full; Psell=Psell)
+end
 @printf("  Qsell=%.2f MW  QWind=%.2f MW  QSolar=%.2f MW  Qdr_contracted=%.2f MW\n",
         result_full.Qsell, result_full.QWind, result_full.QSolar, result_full.Qdr_contracted)
 @printf("  E[Π]=\$%.2f  CVaR=\$%.2f  ρ=\$%.2f\n",
         result_full.EΠ, result_full.CVaR, result_full.ρ)
 
-# ── Plot 4: Seasonality (fast — no optimization) ─────────────────────────────
-println("\nGenerating seasonality plot...")
-plot_seasonality()
-
-# ── Plot 5: DR dispatch (fast — uses result_full) ────────────────────────────
+# ── DR dispatch plots (fast — uses result_full) ───────────────────────────────
 println("\nGenerating DR dispatch plots...")
 plot_dr_dispatch(result_full)
 
-# ── Psell sweep → Plots 1 & 3 (~10 min for 11 pts × 3 configs × 18s each) ───
-println("\nRunning Psell sweep (≈10 min)...")
-t2 = time()
-Ps_vals, sweep_results = run_psell_sweep(; Psell_grid=20.0:10.0:120.0, λ=λ, α=α,
-                                           Qsell_max=Qsell_max,
-                                           Qdr_contracted_max=Qdr_contracted_max)
-println("Psell sweep done in $(round(time()-t2; digits=0))s")
+# ── Tail scenario analysis (cache-or-compute, ~20s) ──────────────────────────
+if isfile(joinpath(RESULTS_DIR, "tail_scenario_analysis.csv"))
+    println("\nLoading tail scenario analysis from cache...")
+    tail_data = load_tail_scenario_analysis()
+else
+    println("\nRunning tail scenario analysis (≈20s)...")
+    tail_data = run_tail_scenario_analysis(Psell; α=α, λ=λ, Qsell_max=Qsell_max,
+                                           PWind=PWind, PSolar=PSolar, Pdr=Pdr)
+end
+println("\nGenerating tail price scenarios plot...")
+plot_tail_scenarios(tail_data)
+println("Generating ranked scenario profits plot...")
+plot_ranked_profits(tail_data)
 
-println("\nGenerating willingness-to-supply plot...")
-plot_willingness_to_supply(Ps_vals, sweep_results)
+# ── Qdr sweep → profit vs DR capacity (disabled) ─────────────────────────────
+# if isfile(joinpath(RESULTS_DIR, "sweep_qdr_capacity.csv"))
+#     println("\nLoading Qdr sweep from cache...")
+#     qdr_vals, qdr_results = load_qdr_sweep()
+# else
+#     println("\nRunning Qdr sweep (≈4 min)...")
+#     t_q = time()
+#     qdr_vals, qdr_results = run_qdr_sweep(Psell; qdr_grid=0.0:0.5:2.0, λ=λ, α=α,
+#                                            Qsell_max=Qsell_max,
+#                                            PWind=PWind, PSolar=PSolar, Pdr=Pdr)
+#     println("Qdr sweep done in $(round(time()-t_q; digits=0))s")
+# end
+# println("\nGenerating profit vs DR capacity plot...")
+# plot_profit_vs_qdr(qdr_vals, qdr_results)
 
-println("Generating certainty equivalent plot...")
-plot_certainty_equivalent(Ps_vals, sweep_results)
+# ── Psell sweep → willingness-to-supply & certainty equivalent (cache only) ──
+if isfile(joinpath(RESULTS_DIR, "sweep_bilateral_price.csv"))
+    println("\nLoading Psell sweep from cache...")
+    Ps_vals, sweep_results = load_psell_sweep()
+    println("Generating willingness-to-supply plot...")
+    plot_willingness_to_supply(Ps_vals, sweep_results)
+    println("Generating certainty equivalent plot...")
+    plot_certainty_equivalent(Ps_vals, sweep_results)
+else
+    println("\nNo Psell sweep cache found — skipping willingness-to-supply & certainty equivalent.")
+end
 
-# ── λ sweep → Plot 2 (~3 min for 10 pts × 18s each) ─────────────────────────
-println("\nRunning λ sweep (≈3 min)...")
-t3 = time()
-λ_vals, rr_results = run_lambda_sweep(Psell; λ_grid=0.1:0.1:1.0, α=α,
-                                       Qsell_max=Qsell_max,
-                                       Qdr_contracted_max=Qdr_contracted_max)
-println("λ sweep done in $(round(time()-t3; digits=0))s")
-
-println("\nGenerating risk-return frontier plot...")
-plot_risk_return_frontier(λ_vals, rr_results)
+# ── λ sweep → risk-return frontier (cache only) ───────────────────────────────
+if isfile(joinpath(RESULTS_DIR, "sweep_risk_weight.csv"))
+    println("\nLoading λ sweep from cache...")
+    λ_vals, rr_results = load_lambda_sweep()
+    println("Generating risk-return frontier plot...")
+    plot_risk_return_frontier(λ_vals, rr_results)
+else
+    println("\nNo λ sweep cache found — skipping risk-return frontier.")
+end
 
 println("\n═══ Task 4 complete — plots saved to $(RESULTS_DIR) ═══")
