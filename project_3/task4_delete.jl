@@ -17,7 +17,7 @@ using Printf
 # =============================================================================
 
 const DATA_DIR = joinpath(@__DIR__, "data")
-const RESULTS_DIR = joinpath(@__DIR__, "results", "task3b")
+const RESULTS_DIR = joinpath(@__DIR__, "results", "task4_high_red_cost")
 mkpath(RESULTS_DIR)
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -117,17 +117,25 @@ Under tolling the annual profit for scenario ω is:
 
 where the a-coefficients absorb the hours and spot-price / GSF data.
 """
+
+function optimize_demand_response_dispatch(Psell, Qsell_max, Q_reduced_max, cost_per_reduce,call_max_per_year, Q_duration_max)
+
+
 function precompute_coefficients(Psell; PWind=100.0, PSH=100.0, PBio=100.0)
     a_sell = zeros(N)
     a_wind = zeros(N)
     a_sh   = zeros(N)
     a_bio  = zeros(N)
     for ω in 1:N
+        GSF_DR = 
+        # sweep depth, duration (number of events), 
+
         for t in 1:T
             a_sell[ω] += Ht[t] * (Psell - π_NE[t,ω])
             a_wind[ω] += Ht[t] * (π_NE[t,ω] * GSF_Wind[t,ω] - PWind)
             a_sh[ω]   += Ht[t] * (π_SE[t,ω] * GSF_SH[t,ω]   - PSH)
             a_bio[ω]  += Ht[t] * (π_SE[t,ω] * GSF_Bio[t,ω]   - PBio)
+            a_dr 
         end
     end
     return a_sell, a_wind, a_sh, a_bio
@@ -184,6 +192,56 @@ function solve_contracting_lp(Psell::Float64;
     ρval = λ * CVaR + (1 - λ) * EΠ
 
     return (Qsell=qs, QWind=qw, QSH=qsh, QBio=qb, EΠ=EΠ, CVaR=CVaR, ρ=ρval)
+end
+
+# Add demand reduction option variables and constraints
+function solve_contracting_lp(Psell::Float64;
+                               λ::Float64=0.5, α::Float64=0.05,
+                               Qsell_max::Float64=100.0,
+                               Q_reduced_max::Float64=20.0,  # Maximum reduction allowed
+                               cost_per_reduce::Float64=5.0, # Cost per unit reduction
+                               active=(wind=true, sh=true, bio=true),
+                               PWind=100.0, PSH=100.0, PBio=100.0)
+
+    a_sell, a_wind, a_sh, a_bio = precompute_coefficients(Psell;
+                                        PWind=PWind, PSH=PSH, PBio=PBio)
+
+    m = Model(HiGHS.Optimizer)
+    set_silent(m)
+
+    @variable(m, 0 <= Qsell <= Qsell_max)
+    @variable(m, 0 <= QWind <= (active.wind ? EC_Wind : 0.0))
+    @variable(m, 0 <= QSH   <= (active.sh   ? EC_SH   : 0.0))
+    @variable(m, 0 <= QBio  <= (active.bio  ? EC_Bio  : 0.0))
+    @variable(m, 0 <= Q_reduce <= Q_reduced_max)  # New variable for demand reduction
+    @variable(m, z)
+    @variable(m, δ[1:N] >= 0)
+
+    # Adjust profit calculation to include demand reduction cost
+    @expression(m, Π[ω=1:N],
+        a_sell[ω] * (Qsell - Q_reduce) + a_wind[ω] * QWind + a_sh[ω] * QSH + a_bio[ω] * QBio)
+
+    @constraint(m, [ω=1:N], δ[ω] >= z - Π[ω])
+
+    @objective(m, Max,
+        λ * (z - (1 / (α * N)) * sum(δ)) +
+        (1 - λ) * (1 / N) * sum(Π) - cost_per_reduce * Q_reduce)  # Include reduction cost
+
+    optimize!(m)
+
+    qs  = value(Qsell)
+    qw  = value(QWind)
+    qsh = value(QSH)
+    qb  = value(QBio)
+    qred = value(Q_reduce)  # Retrieve the reduction value
+
+    profit_vec = annual_profit_vec(Psell, qs - qred, qw, qsh, qb;
+                                   PWind=PWind, PSH=PSH, PBio=PBio)
+    EΠ   = mean(profit_vec)
+    CVaR = cvar(profit_vec, α)
+    ρval = λ * CVaR + (1 - λ) * EΠ
+
+    return (Qsell=qs, QWind=qw, QSH=qsh, QBio=qb, Qreduce=qred, EΠ=EΠ, CVaR=CVaR, ρ=ρval)
 end
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -259,139 +317,222 @@ plt_b = plot(xlabel="P_sell (\$/MWh)", ylabel="Value (\$)",
 ρ_sum_indiv = [results["Wind only"][i].ρ + results["SH only"][i].ρ + results["Bio only"][i].ρ
                for i in eachindex(Ps)]
 RP_portfolio = [r.EΠ - r.CVaR for r in results["Portfolio"]]
-RP_sum_indiv = [results["Wind only"][i].EΠ - results["Wind only"][i].CVaR +
-                results["SH only"][i].EΠ   - results["SH only"][i].CVaR +
-                results["Bio only"][i].EΠ   - results["Bio only"][i].CVaR
-                for i in eachindex(Ps)]
+RP_sum_indiv = [ρ_sum_indiv[i] - results["Portfolio"][i].CVaR for i in eachindex(Ps)]
 
-plot!(plt_b, Ps, ρ_portfolio;  label="ρ portfolio", color=:red, linewidth=2)
-plot!(plt_b, Ps, ρ_sum_indiv;  label="Σ ρ_i (individuals)", color=:blue, linewidth=2)
-plot!(plt_b, Ps, RP_portfolio; label="RP portfolio", color=:red, linewidth=2, linestyle=:dash)
-plot!(plt_b, Ps, RP_sum_indiv; label="Σ RP_i", color=:blue, linewidth=2, linestyle=:dash)
+plot!(plt_b, Ps, ρ_portfolio; label="ρ — Portfolio", color=:red, linewidth=2)
+plot!(plt_b, Ps, ρ_sum_indiv; label="ρ — Sum of individuals", color=:blue, linewidth=2)
+plot!(plt_b, Ps, RP_portfolio; label="RP — Portfolio", color=:red, linestyle=:dash, linewidth=2)
+plot!(plt_b, Ps, RP_sum_indiv; label="RP — Sum of individuals", color=:blue, linestyle=:dash, linewidth=2)
 
-savefig(plt_b, joinpath(RESULTS_DIR, "ce_portfolio_vs_individuals.png"))
-println("Saved ce_portfolio_vs_individuals.png")
-
-# --- Diversification benefit plot ---
-plt_div = plot(xlabel="P_sell (\$/MWh)", ylabel="Diversification benefit (\$)",
-               title="Portfolio diversification benefit (ρ_portfolio − Σ ρ_i)",
-               legend=:topleft, size=(800,400),
-               left_margin=8Plots.mm, bottom_margin=5Plots.mm)
-plot!(plt_div, Ps, ρ_portfolio .- ρ_sum_indiv;
-      label="ρ_portfolio − Σ ρ_i  (≥ 0 by superadditivity)",
-      color=:purple, linewidth=2, fill=0, fillalpha=0.2)
-savefig(plt_div, joinpath(RESULTS_DIR, "diversification_benefit.png"))
-println("Saved diversification_benefit.png")
+savefig(plt_b, joinpath(RESULTS_DIR, "certainty_equivalent_comparison.png"))
+println("Saved certainty_equivalent_comparison.png")
 
 # ─────────────────────────────────────────────────────────────────────────────
-# 7. Risk–return frontier (P_sell = 140, sweep λ)
+# Task 4: Solve LP with reduction option and generate plots
 # ─────────────────────────────────────────────────────────────────────────────
 
-println("\n─── Running risk-return frontier (P_sell=140, λ sweep) ───")
+#function run_task4(; Psell_grid=0.0:5.0:250.0, λ=0.5, α=0.05, Qsell_max=100.0, Q_reduced_max=20.0, cost_per_reduce=5.0)
+function run_task4(; Psell_grid=0.0:5.0:250.0, λ=0.5, α=0.05, Qsell_max=100.0, Q_reduced_max=20.0, cost_per_reduce=100.0)
+    configs = [
+        ("Wind only", (wind=true,  sh=false, bio=false)),
+        ("SH only",   (wind=false, sh=true,  bio=false)),
+        ("Bio only",  (wind=false, sh=false, bio=true)),
+        ("Portfolio",  (wind=true,  sh=true,  bio=true)),
+    ]
 
-λ_grid = 0.200:0.005:1.000
-frontier_E  = Float64[]
-frontier_RP = Float64[]
-frontier_λ  = Float64[]
+    results = Dict{String, Vector{NamedTuple}}()
+    for (name, act) in configs
+        results[name] = NamedTuple[]
+    end
 
-for λ_val in λ_grid
-    r = solve_contracting_lp(140.0; λ=Float64(λ_val), α=0.05,
-                             Qsell_max=100.0,
-                             active=(wind=true, sh=true, bio=true))
-    push!(frontier_E,  r.EΠ)
-    push!(frontier_RP, r.EΠ - r.CVaR)
-    push!(frontier_λ,  λ_val)
+    total = length(Psell_grid) * length(configs)
+    count = 0
+    for Ps in Psell_grid
+        for (name, act) in configs
+            r = solve_contracting_lp(Float64(Ps); λ=λ, α=α, Qsell_max=Qsell_max, Q_reduced_max=Q_reduced_max, cost_per_reduce=cost_per_reduce, active=act)
+            push!(results[name], r)
+            count += 1
+            if count % 40 == 0
+                println("  Progress: $count / $total")
+            end
+        end
+    end
+
+    # Plot 1: Willingness-to-supply
+    println("\n─── Generating Willingness-to-Supply Plot ───")
+    colors = Dict("Wind only"=>:blue, "SH only"=>:green, "Bio only"=>:orange, "Portfolio"=>:red)
+    Ps = collect(Psell_grid)
+
+    plt_a = plot(xlabel="P_sell (\$/MWh)", ylabel="Quantity (avgMW)",
+                 title="Willingness-to-supply with reduction option",
+                 legend=:outertopright, size=(900,500),
+                 left_margin=8Plots.mm, bottom_margin=5Plots.mm)
+
+    for name in ["Wind only", "SH only", "Bio only", "Portfolio"]
+        Qsell_vals = [r.Qsell for r in results[name]]
+        Qtotal_vals = [r.QWind + r.QSH + r.QBio for r in results[name]]
+        Qreduce_vals = [r.Qreduce for r in results[name]]
+        plot!(plt_a, Ps, Qsell_vals; label="Qsell — $name",
+              color=colors[name], linewidth=2)
+        plot!(plt_a, Ps, Qtotal_vals; label="ΣQi — $name",
+              color=colors[name], linewidth=2, linestyle=:dash)
+        plot!(plt_a, Ps, Qreduce_vals; label="Qreduce — $name",
+              color=colors[name], linewidth=2, linestyle=:dot)
+    end
+
+    savefig(plt_a, joinpath(RESULTS_DIR, "willingness_to_supply_with_reduction.png"))
+    println("Saved willingness_to_supply_with_reduction.png")
+
+    # Plot 2: Certainty equivalent — portfolio vs sum of individuals
+    println("\n─── Generating Certainty Equivalent Plot ───")
+    plt_b = plot(xlabel="P_sell (\$/MWh)", ylabel="Value (\$)",
+                 title="Certainty equivalent & risk premium: portfolio vs. individuals",
+                 legend=:outertopright, size=(1000,550),
+                 left_margin=10Plots.mm, bottom_margin=5Plots.mm)
+
+    ρ_portfolio = [r.ρ for r in results["Portfolio"]]
+    ρ_sum_indiv = [results["Wind only"][i].ρ + results["SH only"][i].ρ + results["Bio only"][i].ρ
+                   for i in eachindex(Ps)]
+    RP_portfolio = [r.EΠ - r.CVaR for r in results["Portfolio"]]
+    RP_sum_indiv = [ρ_sum_indiv[i] - results["Portfolio"][i].CVaR for i in eachindex(Ps)]
+
+    plot!(plt_b, Ps, ρ_portfolio; label="ρ — Portfolio", color=:red, linewidth=2)
+    plot!(plt_b, Ps, ρ_sum_indiv; label="ρ — Sum of individuals", color=:blue, linewidth=2)
+    plot!(plt_b, Ps, RP_portfolio; label="RP — Portfolio", color=:red, linestyle=:dash, linewidth=2)
+    plot!(plt_b, Ps, RP_sum_indiv; label="RP — Sum of individuals", color=:blue, linestyle=:dash, linewidth=2)
+
+    savefig(plt_b, joinpath(RESULTS_DIR, "certainty_equivalent_with_reduction.png"))
+    println("Saved certainty_equivalent_with_reduction.png")
+
+    return Psell_grid, results
 end
 
-plt_rr = scatter(frontier_RP, frontier_E;
-                 xlabel="Risk  (E[Π] − CVaR₀.₀₅)",
-                 ylabel="Return  E[Π] (\$)",
-                 title="Risk-return frontier (P_sell=140, joint portfolio)",
-                 legend=:topright, size=(700,500),
-                 left_margin=8Plots.mm, bottom_margin=5Plots.mm,
-                 marker_z=frontier_λ, color=:viridis, markerstrokewidth=0,
-                 markersize=5, colorbar_title="λ",
-                 label="λ ∈ [0.20, 1.00]")
+println("\n─── Running Task 4: LP with Reduction Option ───")
+Psell_grid, results = run_task4()
 
-savefig(plt_rr, joinpath(RESULTS_DIR, "risk_return_frontier.png"))
-println("Saved risk_return_frontier.png")
 
-# ─────────────────────────────────────────────────────────────────────────────
-# 8. Task 3(c): Snapshot at P_sell = 140 $/MWh
-# ─────────────────────────────────────────────────────────────────────────────
 
-println("\n─── Task 3(c): Snapshot at P_sell = 140 ───")
 
-configs_c = [
-    ("Wind only", (wind=true,  sh=false, bio=false)),
-    ("SH only",   (wind=false, sh=true,  bio=false)),
-    ("Bio only",  (wind=false, sh=false, bio=true)),
-    ("Portfolio",  (wind=true,  sh=true,  bio=true)),
-]
 
-println("\n┌──────────────┬────────┬────────┬────────┬────────┬──────────────┬──────────────┬──────────────┐")
-println("│ Config       │ Qsell* │ QWind* │  QSH*  │  QBio* │    E[Π*]     │  CVaR₀.₀₅    │    ρ₀.₅      │")
-println("├──────────────┼────────┼────────┼────────┼────────┼──────────────┼──────────────┼──────────────┤")
+###################################
+### Operation logic constraints ###
 
-for (name, act) in configs_c
-    r = solve_contracting_lp(140.0; λ=0.5, α=0.05, Qsell_max=100.0, active=act)
-    @printf("│ %-12s │ %6.2f │ %6.2f │ %6.2f │ %6.2f │ %12.2f │ %12.2f │ %12.2f │\n",
-            name, r.Qsell, r.QWind, r.QSH, r.QBio, r.EΠ, r.CVaR, r.ρ)
-end
+using JuMP
+using HiGHS
+using Dates
 
-println("└──────────────┴────────┴────────┴────────┴────────┴──────────────┴──────────────┴──────────────┘")
+# ------------------------------------------------------------
+# Time indexing
+# ------------------------------------------------------------
 
-# ─────────────────────────────────────────────────────────────────────────────
-# 9. Diagnostics: Seasonality & correlation analysis for SH inclusion
-# ─────────────────────────────────────────────────────────────────────────────
+# Non-leap year example
+start_time = DateTime(2025, 1, 1, 0, 0, 0)
 
-println("\n─── Seasonality analysis (supporting Task 3c commentary) ───")
+T = 8760
+times = [start_time + Hour(t - 1) for t in 1:T]
 
-month_labels = ["Jan","Feb","Mar","Apr","May","Jun","Jul","Aug","Sep","Oct","Nov","Dec"]
+# ------------------------------------------------------------
+# Build day/month index sets
+# ------------------------------------------------------------
 
-# Monthly quantiles of GSF_SH
-q05_sh  = [quantile(GSF_SH[t,:], 0.05) for t in 1:T]
-q50_sh  = [quantile(GSF_SH[t,:], 0.50) for t in 1:T]
-q95_sh  = [quantile(GSF_SH[t,:], 0.95) for t in 1:T]
-mean_sh = [mean(GSF_SH[t,:]) for t in 1:T]
+# Day index for each hour
+day_of_hour = [Dates.dayofyear(t) for t in times]
 
-q05_wind  = [quantile(GSF_Wind[t,:], 0.05) for t in 1:T]
-q50_wind  = [quantile(GSF_Wind[t,:], 0.50) for t in 1:T]
-q95_wind  = [quantile(GSF_Wind[t,:], 0.95) for t in 1:T]
+# Month index for each hour
+month_of_hour = [Dates.month(t) for t in times]
 
-plt_gsf = plot(1:T, q50_sh; label="SH median", color=:green, linewidth=2,
-               xlabel="Month", ylabel="GSF", xticks=(1:12, month_labels),
-               title="GSF seasonality: Small Hydro vs Wind",
-               legend=:topright, size=(800,450),
-               left_margin=8Plots.mm, bottom_margin=5Plots.mm)
-plot!(plt_gsf, 1:T, q50_wind; label="Wind median", color=:blue, linewidth=2)
-plot!(plt_gsf, 1:T, q05_sh; label="SH 5%-95%", color=:green, linewidth=1,
-      linestyle=:dash, fillrange=q95_sh, fillalpha=0.15)
-plot!(plt_gsf, 1:T, q05_wind; label="Wind 5%-95%", color=:blue, linewidth=1,
-      linestyle=:dash, fillrange=q95_wind, fillalpha=0.15)
-savefig(plt_gsf, joinpath(RESULTS_DIR, "gsf_seasonality.png"))
+# Hours belonging to each day
+days = unique(day_of_hour)
 
-# Per-scenario temporal correlation between spot price and GSF
-corr_se_sh = Float64[]
-corr_ne_wind = Float64[]
-for ω in 1:N
-    push!(corr_se_sh,   cor(π_SE[:, ω], GSF_SH[:, ω]))
-    push!(corr_ne_wind, cor(π_NE[:, ω], GSF_Wind[:, ω]))
-end
+hours_in_day = Dict(
+    d => findall(day_of_hour .== d)
+    for d in days
+)
 
-plt_corr = histogram(corr_ne_wind; bins=50, alpha=0.5, label="Corr(π_NE, GSF_Wind)",
-                     color=:blue, normalize=:pdf,
-                     xlabel="Temporal correlation (across 12 months)",
-                     ylabel="Density",
-                     title="Per-scenario temporal correlation: spot price vs GSF",
-                     legend=:topleft, size=(800,400),
-                     left_margin=8Plots.mm, bottom_margin=5Plots.mm)
-histogram!(plt_corr, corr_se_sh; bins=50, alpha=0.5, label="Corr(π_SE, GSF_SH)",
-           color=:green, normalize=:pdf)
-savefig(plt_corr, joinpath(RESULTS_DIR, "temporal_correlation.png"))
+# Hours belonging to each month
+months = 1:12
 
-println("Mean Corr(π_NE, GSF_Wind) = ", round(mean(corr_ne_wind); digits=4))
-println("Mean Corr(π_SE, GSF_SH)   = ", round(mean(corr_se_sh); digits=4))
+hours_in_month = Dict(
+    m => findall(month_of_hour .== m)
+    for m in months
+)
 
-println("\nSaved gsf_seasonality.png and temporal_correlation.png")
-println("\n═══ Task 3 complete ═══")
+# ------------------------------------------------------------
+# Model
+# ------------------------------------------------------------
+
+model = Model(HiGHS.Optimizer)
+
+# y[t] = 1 if DR event active at hour t
+@variable(model, y[1:T], Bin)
+
+# s[t] = 1 if DR event starts at hour t
+@variable(model, s[1:T], Bin)
+
+# ------------------------------------------------------------
+# Event start logic
+# ------------------------------------------------------------
+
+# First hour
+@constraint(model, s[1] >= y[1])
+
+# Remaining hours
+@constraint(model,
+    [t in 2:T],
+    s[t] >= y[t] - y[t-1]
+)
+
+# ------------------------------------------------------------
+# At most one event per day
+# ------------------------------------------------------------
+
+@constraint(model,
+    [d in days],
+    sum(s[t] for t in hours_in_day[d]) <= 1
+)
+
+# ------------------------------------------------------------
+# Maximum 6 event hours per day
+# ------------------------------------------------------------
+
+@constraint(model,
+    [d in days],
+    sum(y[t] for t in hours_in_day[d]) <= 6
+)
+
+# ------------------------------------------------------------
+# Maximum 10 events per month
+# ------------------------------------------------------------
+
+@constraint(model,
+    [m in months],
+    sum(s[t] for t in hours_in_month[m]) <= 10
+)
+
+# ------------------------------------------------------------
+# Maximum 180 event hours per year
+# ------------------------------------------------------------
+
+@constraint(model,
+    sum(y[t] for t in 1:T) <= 180
+)
+
+# ------------------------------------------------------------
+# Example objective
+# ------------------------------------------------------------
+
+# Dummy hourly values
+value = rand(T)
+
+@objective(model, Max,
+    sum(value[t] * y[t] for t in 1:T)
+)
+
+optimize!(model)
+
+# ------------------------------------------------------------
+# Results
+# ------------------------------------------------------------
+
+println("Total event hours = ", value.(y) |> sum)
+println("Total events = ", value.(s) |> sum)

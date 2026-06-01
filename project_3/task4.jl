@@ -184,7 +184,7 @@ function solve_contracting_lp(Psell::Float64;
     CVaR_val = cvar(profit_vec, α)
     ρval     = λ * CVaR_val + (1-λ) * EΠ
 
-    return (Qsell=qs, QWind=qw, QSolar=qsol, Qdr_contracted=qdr_c,
+    return (Qsell=qs, QWind=qw, QSolar=qsol, Qdr_contracted=qdr_c, Qdr_disp=qdr_d,
             EΠ=EΠ, CVaR=CVaR_val, ρ=ρval,
             y_vals=y_vals, s_vals=s_vals, profit_vec=profit_vec)
 end
@@ -442,17 +442,17 @@ end
 Psell              = 70.0
 λ                  = 0.5
 α                  = 0.05
-Qsell_max          = 10.0
-Qdr_contracted_max = 5.0
-PWind              = 0.0
-PSolar             = 0.0
-Pdr                = 0.0
+Qsell_max          = 10.0   # 10
+Qdr_contracted_max = 5.0   # 5
+PWind              = 0.0    # 0
+PSolar             = 0.0    # 0
+Pdr                = 0.0    # 0
 
 # ── Single-scenario smoke test ───────────────────────────────────────────────
 println("\nRunning single-scenario test (scenario 1: $(SCENARIO_LABELS[1]))...")
 t0 = time()
 result_test = solve_contracting_lp(Psell; λ=λ, α=α,
-    Qsell_max=Qsell_max, Qdr_contracted_max=Qdr_contracted_max,
+    Qsell_max=Qsell_max, Qdr_contracted_max=Qdr_contracted_max, Pdr=Pdr,
     scenario_indices=1:1)
 elapsed = time() - t0
 println("Done in $(round(elapsed; digits=1))s")
@@ -461,48 +461,292 @@ println("Done in $(round(elapsed; digits=1))s")
 @printf("  E[Π]=\$%.2f  CVaR=\$%.2f  ρ=\$%.2f\n",
         result_test.EΠ, result_test.CVaR, result_test.ρ)
 
-# ── Full 40-scenario run ─────────────────────────────────────────────────────
-println("\nRunning full 40-scenario optimization...")
-t1 = time()
-result_full = solve_contracting_lp(Psell; λ=λ, α=α,
-    Qsell_max=Qsell_max, Qdr_contracted_max=Qdr_contracted_max)
-println("Done in $(round(time()-t1; digits=1))s")
-@printf("  Qsell=%.2f MW  QWind=%.2f MW  QSolar=%.2f MW  Qdr_contracted=%.2f MW\n",
-        result_full.Qsell, result_full.QWind, result_full.QSolar, result_full.Qdr_contracted)
-@printf("  E[Π]=\$%.2f  CVaR=\$%.2f  ρ=\$%.2f\n",
-        result_full.EΠ, result_full.CVaR, result_full.ρ)
 
-# ── Plot 4: Seasonality (fast — no optimization) ─────────────────────────────
-println("\nGenerating seasonality plot...")
-plot_seasonality()
 
-# ── Plot 5: DR dispatch (fast — uses result_full) ────────────────────────────
-println("\nGenerating DR dispatch plots...")
-plot_dr_dispatch(result_full)
 
-# ── Psell sweep → Plots 1 & 3 (~10 min for 11 pts × 3 configs × 18s each) ───
-println("\nRunning Psell sweep (≈10 min)...")
-t2 = time()
-Ps_vals, sweep_results = run_psell_sweep(; Psell_grid=20.0:10.0:120.0, λ=λ, α=α,
-                                           Qsell_max=Qsell_max,
-                                           Qdr_contracted_max=Qdr_contracted_max)
-println("Psell sweep done in $(round(time()-t2; digits=0))s")
+# # ── Full 40-scenario run ─────────────────────────────────────────────────────
+# println("\nRunning full 40-scenario optimization...")
+# t1 = time()
+# result_full = solve_contracting_lp(Psell; λ=λ, α=α,
+#     Qsell_max=Qsell_max, Qdr_contracted_max=Qdr_contracted_max, Pdr=Pdr)
+# println("Done in $(round(time()-t1; digits=1))s")
+# @printf("  Qsell=%.2f MW  QWind=%.2f MW  QSolar=%.2f MW  Qdr_contracted=%.2f MW\n",
+#         result_full.Qsell, result_full.QWind, result_full.QSolar, result_full.Qdr_contracted)
+# @printf("  E[Π]=\$%.2f  CVaR=\$%.2f  ρ=\$%.2f\n",
+#         result_full.EΠ, result_full.CVaR, result_full.ρ)
 
-println("\nGenerating willingness-to-supply plot...")
-plot_willingness_to_supply(Ps_vals, sweep_results)
+# # ── Plot 4: Seasonality (fast — no optimization) ─────────────────────────────
+# println("\nGenerating seasonality plot...")
+# plot_seasonality()
 
-println("Generating certainty equivalent plot...")
-plot_certainty_equivalent(Ps_vals, sweep_results)
+# # ── Plot 5: DR dispatch (fast — uses result_full) ────────────────────────────
+# println("\nGenerating DR dispatch plots...")
+# plot_dr_dispatch(result_full)
 
-# ── λ sweep → Plot 2 (~3 min for 10 pts × 18s each) ─────────────────────────
-println("\nRunning λ sweep (≈3 min)...")
-t3 = time()
-λ_vals, rr_results = run_lambda_sweep(Psell; λ_grid=0.1:0.1:1.0, α=α,
-                                       Qsell_max=Qsell_max,
-                                       Qdr_contracted_max=Qdr_contracted_max)
-println("λ sweep done in $(round(time()-t3; digits=0))s")
 
-println("\nGenerating risk-return frontier plot...")
-plot_risk_return_frontier(λ_vals, rr_results)
+
+
+# # ── Psell sweep → Plots 1 & 3 (~10 min for 11 pts × 3 configs × 18s each) ───
+# println("\nRunning Psell sweep (≈10 min)...")
+# t2 = time()
+# Ps_vals, sweep_results = run_psell_sweep(; Psell_grid=20.0:10.0:120.0, λ=λ, α=α,
+#                                            Qsell_max=Qsell_max,
+#                                            Qdr_contracted_max=Qdr_contracted_max,
+#                                            Pdr=Pdr)
+# println("Psell sweep done in $(round(time()-t2; digits=0))s")
+
+# println("\nGenerating willingness-to-supply plot...")
+# plot_willingness_to_supply(Ps_vals, sweep_results)
+
+# println("Generating certainty equivalent plot...")
+# plot_certainty_equivalent(Ps_vals, sweep_results)
+
+# # ── λ sweep → Plot 2 (~3 min for 10 pts × 18s each) ─────────────────────────
+# println("\nRunning λ sweep (≈3 min)...")
+# t3 = time()
+# λ_vals, rr_results = run_lambda_sweep(Psell; λ_grid=0.1:0.1:1.0, α=α,
+#                                        Qsell_max=Qsell_max,
+#                                        Qdr_contracted_max=Qdr_contracted_max
+#                                        Pdr=Pdr)
+# println("λ sweep done in $(round(time()-t3; digits=0))s")
+
+# println("\nGenerating risk-return frontier plot...")
+# plot_risk_return_frontier(λ_vals, rr_results)
+
+# ── Qdr_contracted_max sweep  ─────────────────────────────────────────────────
+function sweep_Qdr_contracted_max(; Qdr_grid=range(0, stop=10, length=11), Psell=70.0, λ=0.5, α=0.05)
+    results = []
+    total_points = length(Qdr_grid)
+
+    for (i, Qdr_contracted_max) in enumerate(Qdr_grid)
+        println("Running Qdr_contracted_max = ", Qdr_contracted_max, " (", i, "/", total_points, ")")
+        result = solve_contracting_lp(Psell; λ=λ, α=α, Qsell_max=10.0, Qdr_contracted_max=Qdr_contracted_max, Pdr=0.0)
+
+        # Collect metrics
+        total_s_events = sum(result.s_vals)
+        total_y_hours = sum(result.y_vals)
+        total_Qdisp = sum(result.Qdr_disp)
+
+        push!(results, (
+            Qdr_contracted_max,
+            result.EΠ, result.CVaR, result.ρ,
+            result.Qsell, result.QWind, result.QSolar, result.Qdr_contracted,
+            total_s_events, total_y_hours, total_Qdisp
+        ))
+    end
+
+    # Save results to CSV
+    csv_path = joinpath(RESULTS_DIR, "sweep_Qdr_contracted_max.csv")
+    open(csv_path, "w") do io
+        println(io, "Qdr_contracted_max,Profit,CVaR,Certainty_Equivalent,Qsell,QWind,QSolar,Qdr_contracted,DR_Events,DR_Hours,DR_Energy")
+        for r in results
+            println(io, join(r, ","))
+        end
+    end
+
+    println("Saved sweep_Qdr_contracted_max.csv")
+    return results
+end
+
+# Add call to the sweep function
+println("\nRunning Qdr_contracted_max sweep ...")
+sweep_Qdr_contracted_max()
+
+# ── Plot results from Qdr_contracted_max sweep ──────────────────────────────
+function plot_qdr_contracted_max_results()
+    # Read the CSV file
+    csv_path = joinpath(RESULTS_DIR, "sweep_Qdr_contracted_max.csv")
+    data = CSV.read(csv_path, DataFrame)
+
+    # Extract data
+    x = data.Qdr_contracted_max
+    profit = data.Profit
+    cvar = data.CVaR
+    ce = data.Certainty_Equivalent
+    qsell = data.Qsell
+    qwind = data.QWind
+    qsolar = data.QSolar
+    qdr_contracted = data.Qdr_contracted
+    dr_events = data.DR_Events
+    dr_hours = data.DR_Hours
+    dr_energy = data.DR_Energy
+
+    # First plot: Profit, CVaR, Certainty Equivalent, and quantities
+    plt1 = plot(x, profit; label="Profit", color=:blue, linewidth=2, xlabel="Qdr_contracted_max", ylabel="Profit / CVaR / Certainty Eq.")
+    plot!(plt1, x, cvar; label="CVaR", color=:red, linewidth=2)
+    plot!(plt1, x, ce; label="Certainty Eq.", color=:green, linewidth=2, linestyle=:dash)
+
+    twin = twinx()
+    plot!(twin, x, qsell; label="Qsell", color=:purple, linewidth=2)
+    plot!(twin, x, qwind; label="QWind", color=:orange, linewidth=2)
+    plot!(twin, x, qsolar; label="QSolar", color=:cyan, linewidth=2)
+    plot!(twin, x, qdr_contracted; label="Qdr_contracted", color=:magenta, linewidth=2)
+    ylabel!(twin, "Quantities")
+    #legend(:topright)
+    plot!(plt1, legend=:topright)
+    savefig(plt1, joinpath(RESULTS_DIR, "qdr_contracted_max_plot1.png"))
+    println("Saved qdr_contracted_max_plot1.png")
+
+    # Second plot: DR Events, DR Hours, DR Energy
+    plt2 = plot(layout=(1,3), size=(1200,400))
+    bar!(plt2[1], x, dr_events; xlabel="Qdr_contracted_max", ylabel="DR Events", color=:blue, legend=false)
+    bar!(plt2[2], x, dr_hours; xlabel="Qdr_contracted_max", ylabel="DR Hours", color=:green, legend=false)
+    bar!(plt2[3], x, dr_energy; xlabel="Qdr_contracted_max", ylabel="DR Energy", color=:red, legend=false)
+    savefig(plt2, joinpath(RESULTS_DIR, "qdr_contracted_max_plot2.png"))
+    println("Saved qdr_contracted_max_plot2.png")
+end
+
+function plot_qdr_contracted_max_results2()
+
+    # Read the CSV file
+    csv_path = joinpath(RESULTS_DIR, "sweep_Qdr_contracted_max.csv")
+    data = CSV.read(csv_path, DataFrame)
+
+    # Extract data
+    x = data.Qdr_contracted_max
+
+    profit = data.Profit
+    cvar = data.CVaR
+    ce = data.Certainty_Equivalent
+
+    qsell = data.Qsell
+    qwind = data.QWind
+    qsolar = data.QSolar
+    qdr_contracted = data.Qdr_contracted
+
+    dr_events = data.DR_Events
+    dr_hours = data.DR_Hours
+    dr_energy = data.DR_Energy
+
+    # ─────────────────────────────────────────────────────────────
+    # First Plot
+    # ─────────────────────────────────────────────────────────────
+
+    plt1 = plot(
+        x, profit;
+        label = "Profit",
+        color = :blue,
+        linewidth = 2,
+        linestyle = :dash,
+        xlabel = "Qdr_contracted_max",
+        ylabel = "Profit / CVaR / Certainty Eq.",
+        legend = :topleft,
+        size = (1000,600),
+        margin = 10Plots.mm
+    )
+
+    plot!(
+        plt1,
+        x, cvar;
+        label = "CVaR",
+        color = :red,
+        linewidth = 2,
+        linestyle = :dash
+    )
+
+    plot!(
+        plt1,
+        x, ce;
+        label = "Certainty Eq.",
+        color = :green,
+        linewidth = 2,
+        linestyle = :dash
+    )
+
+    # Twin axis for quantities
+    twin = twinx()
+
+    plot!(
+        twin,
+        x, qsell;
+        label = "Qsell",
+        color = :purple,
+        linewidth = 2
+    )
+
+    plot!(
+        twin,
+        x, qwind;
+        label = "QWind",
+        color = :orange,
+        linewidth = 2
+    )
+
+    plot!(
+        twin,
+        x, qsolar;
+        label = "QSolar",
+        color = :cyan,
+        linewidth = 2
+    )
+
+    plot!(
+        twin,
+        x, qdr_contracted;
+        label = "Qdr_contracted",
+        color = :magenta,
+        linewidth = 2,
+        ylabel = "Quantities",
+        legend = :topright
+    )
+
+    savefig(
+        plt1,
+        joinpath(RESULTS_DIR, "qdr_contracted_max_plot1.png")
+    )
+
+    println("Saved qdr_contracted_max_plot1.png")
+
+    # ─────────────────────────────────────────────────────────────
+    # Second Plot
+    # ─────────────────────────────────────────────────────────────
+
+    plt2 = plot(
+        layout = (1,3),
+        size = (1400,500),
+        margin = 10Plots.mm
+    )
+
+    bar!(
+        plt2[1],
+        x,
+        dr_events;
+        xlabel = "Qdr_contracted_max",
+        ylabel = "DR Events",
+        color = :blue,
+        legend = false
+    )
+
+    bar!(
+        plt2[2],
+        x,
+        dr_hours;
+        xlabel = "Qdr_contracted_max",
+        ylabel = "DR Hours",
+        color = :green,
+        legend = false
+    )
+
+    bar!(
+        plt2[3],
+        x,
+        dr_energy;
+        xlabel = "Qdr_contracted_max",
+        ylabel = "DR Energy",
+        color = :red,
+        legend = false
+    )
+
+    savefig(
+        plt2,
+        joinpath(RESULTS_DIR, "qdr_contracted_max_plot2.png")
+    )
+
+    println("Saved qdr_contracted_max_plot2.png")
+end
+
+# Call the plotting function
+println("\nGenerating plots for Qdr_contracted_max sweep results...")
+plot_qdr_contracted_max_results2()
 
 println("\n═══ Task 4 complete — plots saved to $(RESULTS_DIR) ═══")
