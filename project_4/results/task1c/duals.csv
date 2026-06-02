@@ -1,0 +1,3 @@
+source,pi,beta_1,beta_2,beta_3
+primal_model,150.0,50.0,-0.0,-0.0
+dual_model,150.0,50.0,0.0,0.0
