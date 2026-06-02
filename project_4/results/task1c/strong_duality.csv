@@ -1,0 +1,5 @@
+quantity,value
+primal_cost_C_star,13000.0
+dual_obj_pi_d_minus_betaQ,13000.0
+difference,0.0
+strong_duality_holds,1.0
